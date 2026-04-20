@@ -14,7 +14,7 @@ use tauri::menu::{Menu, MenuItem};
 
 struct AppState {
     vector_store: Arc<VectorStore>,
-    indexer: Arc<Indexer>,
+    _indexer: Arc<Indexer>,
     db: Arc<Database>,
 }
 
@@ -100,7 +100,7 @@ pub fn run() {
                     clipboard_listener.start().await;
                 });
                 
-                app.manage(AppState { vector_store, indexer, db });
+                app.manage(AppState { vector_store, _indexer: indexer, db });
             });
             Ok(())
         })

@@ -5,13 +5,13 @@ use tauri::AppHandle;
 use crate::services::funnel::Funnel;
 
 pub struct ClipboardListener {
-    app_handle: AppHandle,
+    _app_handle: AppHandle,
     funnel: Arc<Funnel>,
 }
 
 impl ClipboardListener {
     pub fn new(app_handle: AppHandle, funnel: Arc<Funnel>) -> Self {
-        Self { app_handle, funnel }
+        Self { _app_handle: app_handle, funnel }
     }
 
     pub async fn start(&self) {

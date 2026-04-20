@@ -1,8 +1,7 @@
 use crate::services::vector_store::VectorStore;
-use notify::{Watcher, RecursiveMode, Config, Event};
+use notify::{Watcher, RecursiveMode, Event};
 use std::path::PathBuf;
 use tauri::AppHandle;
-use tokio::sync::Mutex;
 use std::sync::Arc;
 use crate::config;
 
