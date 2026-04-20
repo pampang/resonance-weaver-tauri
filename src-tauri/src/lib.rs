@@ -5,10 +5,14 @@ use std::sync::Arc;
 use tauri::Manager;
 use crate::services::vector_store::VectorStore;
 use crate::services::indexer::Indexer;
+use crate::services::db::Database;
+use crate::services::funnel::Funnel;
+use crate::services::clipboard::ClipboardListener;
 
 struct AppState {
     vector_store: Arc<VectorStore>,
     indexer: Arc<Indexer>,
+    db: Arc<Database>,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -33,6 +37,11 @@ async fn search_resonance(state: tauri::State<'_, AppState>, text: String) -> Re
     state.vector_store.search(embedding, 3).await
 }
 
+#[tauri::command]
+fn get_samples(state: tauri::State<'_, AppState>) -> Result<Vec<services::db::Sample>, String> {
+    state.db.get_samples()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -41,16 +50,25 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::block_on(async move {
+                let db = Arc::new(Database::new(&handle).expect("failed to init db"));
+                db.purge_old_records().expect("failed to purge records");
+                
                 let vector_store = Arc::new(VectorStore::new(&handle).await.expect("failed to init vector store"));
                 let indexer = Arc::new(Indexer::new(vector_store.clone(), handle.clone()));
-                
                 let _ = indexer.start_watching().await;
                 
-                app.manage(AppState { vector_store, indexer });
+                let funnel = Arc::new(Funnel::new(handle.clone(), vector_store.clone(), db.clone()));
+                let clipboard_listener = ClipboardListener::new(handle.clone(), funnel);
+                
+                tokio::spawn(async move {
+                    clipboard_listener.start().await;
+                });
+                
+                app.manage(AppState { vector_store, indexer, db });
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, get_config, save_config, search_resonance])
+        .invoke_handler(tauri::generate_handler![greet, get_config, save_config, search_resonance, get_samples])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
