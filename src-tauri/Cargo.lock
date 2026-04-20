@@ -9113,6 +9113,7 @@ dependencies = [
  "arboard",
  "arrow 55.2.0",
  "chrono",
+ "futures",
  "lancedb",
  "notify",
  "reqwest 0.13.2",

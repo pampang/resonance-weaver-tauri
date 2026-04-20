@@ -31,4 +31,5 @@ reqwest = "0.13.2"
 notify = "8.2.0"
 arboard = "3.6.1"
 tauri-plugin-log = "2.8.0"
+futures = "0.3.32"
 
