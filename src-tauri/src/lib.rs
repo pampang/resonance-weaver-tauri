@@ -42,6 +42,12 @@ fn get_samples(state: tauri::State<'_, AppState>) -> Result<Vec<services::db::Sa
     state.db.get_samples()
 }
 
+#[tauri::command]
+fn open_deep_bridge(content: String) -> Result<(), String> {
+    let url = format!("https://gemini.google.com/app?prompt={}", urlencoding::encode(&content));
+    open::that(url).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -68,7 +74,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, get_config, save_config, search_resonance, get_samples])
+        .invoke_handler(tauri::generate_handler![greet, get_config, save_config, search_resonance, get_samples, open_deep_bridge])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

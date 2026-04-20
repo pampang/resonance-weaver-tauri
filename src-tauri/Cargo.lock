@@ -9116,6 +9116,7 @@ dependencies = [
  "futures",
  "lancedb",
  "notify",
+ "open",
  "reqwest 0.13.2",
  "rusqlite",
  "serde",
@@ -9125,6 +9126,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-opener",
  "tokio",
+ "urlencoding",
 ]
 
 [[package]]
