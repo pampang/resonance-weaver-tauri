@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 
 interface Config {
   kb_sources: string[];
@@ -15,6 +16,9 @@ const config = ref<Config>({
 });
 
 const app_whitelist_str = ref('');
+const running_apps = ref<string[]>([]);
+const is_saving = ref(false);
+const is_reindexing = ref(false);
 
 const loadConfig = async () => {
   const c = await invoke('get_config') as Config;
@@ -23,91 +27,276 @@ const loadConfig = async () => {
 };
 
 const saveConfig = async () => {
+  is_saving.value = true;
   config.value.app_whitelist = app_whitelist_str.value.split(',').map(s => s.trim()).filter(s => s !== '');
-  await invoke('save_config', { config: config.value });
+  try {
+    await invoke('save_config', { config: config.value });
+    alert('Configuration saved and watcher updated.');
+  } finally {
+    is_saving.value = false;
+  }
 };
 
-const addSource = () => {
-  config.value.kb_sources.push('');
+const pickFolder = async () => {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+  });
+  if (selected && typeof selected === 'string') {
+    config.value.kb_sources.push(selected);
+  }
 };
 
 const removeSource = (index: number) => {
   config.value.kb_sources.splice(index, 1);
 };
 
-onMounted(loadConfig);
+const triggerReindex = async () => {
+  is_reindexing.value = true;
+  try {
+    await invoke('reindex');
+    alert('Full reindexing triggered. Check logs for progress.');
+  } catch (e) {
+    alert('Error during reindexing: ' + e);
+  } finally {
+    is_reindexing.value = false;
+  }
+};
+
+const fetchRunningApps = async () => {
+  try {
+    running_apps.value = await invoke('get_running_apps');
+  } catch (e) {
+    console.error(e);
+  }
+};
+
+const addToWhitelist = (appName: string) => {
+  const current = app_whitelist_str.value.split(',').map(s => s.trim()).filter(s => s !== '');
+  if (!current.includes(appName)) {
+    current.push(appName);
+    app_whitelist_str.value = current.join(', ');
+  }
+};
+
+onMounted(() => {
+  loadConfig();
+  fetchRunningApps();
+});
 </script>
 
 <template>
   <div class="config-panel">
-    <h2>Configuration</h2>
+    <div class="header-actions">
+      <h2>Configuration</h2>
+      <button class="reindex-btn" :disabled="is_reindexing" @click="triggerReindex">
+        {{ is_reindexing ? 'Indexing...' : 'Reindex All Now' }}
+      </button>
+    </div>
+
     <div class="section">
       <h3>Knowledge Sources</h3>
-      <div v-for="(_, index) in config.kb_sources" :key="index" class="input-group">
-        <input v-model="config.kb_sources[index]" placeholder="/path/to/folder" />
-        <button @click="removeSource(index)">Remove</button>
+      <div v-for="(source, index) in config.kb_sources" :key="index" class="input-group">
+        <input :value="source" readonly />
+        <button class="remove-btn" @click="removeSource(index)">✕</button>
       </div>
-      <button @click="addSource">Add Source</button>
+      <button class="add-btn" @click="pickFolder">+ Add Folder Source</button>
     </div>
 
     <div class="section">
       <h3>App Whitelist</h3>
-      <p>Comma separated apps</p>
-      <textarea v-model="app_whitelist_str"></textarea>
+      <p class="hint">Comma separated app names to monitor</p>
+      <textarea v-model="app_whitelist_str" placeholder="e.g. Slack, Discord, Notes"></textarea>
+      
+      <div class="running-apps">
+        <h4>Running Apps (Click to add):</h4>
+        <div class="app-chips">
+          <span v-for="app in running_apps" :key="app" class="app-chip" @click="addToWhitelist(app)">
+            {{ app }}
+          </span>
+        </div>
+      </div>
     </div>
 
     <div class="section">
-      <h3>Threshold: {{ config.threshold }}</h3>
-      <input type="range" v-model.number="config.threshold" min="0" max="1" step="0.05" />
+      <h3>Resonance Threshold: {{ config.threshold }}</h3>
+      <div class="threshold-control">
+        <input type="range" v-model.number="config.threshold" min="0" max="1" step="0.05" />
+        <span class="hint">Lower = stricter, Higher = more matches</span>
+      </div>
     </div>
 
-    <button class="save-btn" @click="saveConfig">Save Configuration</button>
+    <button class="save-btn" :disabled="is_saving" @click="saveConfig">
+      {{ is_saving ? 'Saving...' : 'Save Configuration' }}
+    </button>
   </div>
 </template>
 
 <style scoped>
 .config-panel {
-  padding: 20px;
-  max-width: 600px;
+  padding: 24px;
+  max-width: 700px;
   margin: 0 auto;
+  overflow-y: auto;
+}
+
+.header-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
 }
 
 .section {
-  margin-bottom: 25px;
+  background: #1a1a1a;
+  padding: 20px;
+  border-radius: 12px;
+  margin-bottom: 24px;
+  border: 1px solid #333;
+}
+
+h2, h3, h4 {
+  margin-top: 0;
+  color: #fff;
+}
+
+h3 {
+  font-size: 1.1rem;
+  margin-bottom: 12px;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: #888;
+  margin-bottom: 12px;
 }
 
 .input-group {
   display: flex;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+  gap: 8px;
 }
 
-input[type="text"], input:not([type]) {
+input[readonly] {
   flex-grow: 1;
-  padding: 8px;
-  background: #1a1a1a;
-  border: 1px solid #333;
-  color: white;
-  border-radius: 4px;
+  padding: 10px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  color: #ccc;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.remove-btn {
+  background: #333;
+  color: #ff4d4d;
+  border: none;
+  width: 38px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.remove-btn:hover {
+  background: #444;
+}
+
+.add-btn {
+  width: 100%;
+  padding: 10px;
+  background: #2a2a2a;
+  color: #646cff;
+  border: 1px dashed #646cff;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-top: 8px;
+  font-weight: 500;
+}
+
+.add-btn:hover {
+  background: #303040;
 }
 
 textarea {
   width: 100%;
   height: 80px;
-  background: #1a1a1a;
-  border: 1px solid #333;
+  background: #2a2a2a;
+  border: 1px solid #444;
   color: white;
-  border-radius: 4px;
-  padding: 8px;
+  border-radius: 6px;
+  padding: 12px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.running-apps {
+  margin-top: 16px;
+}
+
+.app-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.app-chip {
+  background: #333;
+  color: #aaa;
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.app-chip:hover {
+  background: #646cff;
+  color: white;
+}
+
+.threshold-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+input[type="range"] {
+  width: 100%;
 }
 
 .save-btn {
   width: 100%;
-  padding: 12px;
-  background: #4CAF50;
+  padding: 14px;
+  background: #646cff;
+  color: white;
+  border: none;
+  border-radius: 8px;
   font-weight: bold;
+  font-size: 1rem;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(100, 108, 255, 0.2);
 }
 
-.save-btn:hover {
-  background: #45a049;
+.save-btn:hover:not(:disabled) {
+  background: #535bf2;
+}
+
+.save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.reindex-btn {
+  background: transparent;
+  color: #646cff;
+  border: 1px solid #646cff;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.reindex-btn:hover {
+  background: #646cff1a;
 }
 </style>
