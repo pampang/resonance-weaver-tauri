@@ -18,6 +18,17 @@ const currentTab = ref('triage');
   </main>
 </template>
 
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+</style>
+
 <style scoped>
 .container {
   margin: 0;
@@ -25,9 +36,11 @@ const currentTab = ref('triage');
   display: flex;
   flex-direction: column;
   height: 100vh;
+  width: 100vw;
   background-color: #0f0f0f;
   color: white;
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  overflow: hidden;
 }
 
 .tabs {
