@@ -43,7 +43,7 @@ onMounted(loadConfig);
     <h2>Configuration</h2>
     <div class="section">
       <h3>Knowledge Sources</h3>
-      <div v-for="(source, index) in config.kb_sources" :key="index" class="input-group">
+      <div v-for="(_, index) in config.kb_sources" :key="index" class="input-group">
         <input v-model="config.kb_sources[index]" placeholder="/path/to/folder" />
         <button @click="removeSource(index)">Remove</button>
       </div>

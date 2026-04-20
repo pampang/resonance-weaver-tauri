@@ -4,7 +4,7 @@ use crate::services::db::Database;
 use crate::config;
 use tauri::AppHandle;
 use std::sync::Arc;
-use log::{info, warn};
+use log::{info};
 
 pub struct Funnel {
     app_handle: AppHandle,
@@ -40,7 +40,16 @@ impl Funnel {
         if !matches.is_empty() {
             // Found resonance! Store in triage buffer (SQLite)
             info!("Resonance found! Saving to triage buffer.");
-            self.db.add_sample(content, app_name, matches[0].1).await?;
+            self.db.add_sample(content, app_name.clone(), matches[0].1).await?;
+
+            // Send notification
+            use tauri_plugin_notification::NotificationExt;
+            self.app_handle.notification()
+                .builder()
+                .title("New Resonance Found")
+                .body(format!("Resonance detected from {}", app_name))
+                .show()
+                .unwrap();
         }
 
         Ok(())

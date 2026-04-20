@@ -3,10 +3,10 @@ import { ref, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 
 interface Sample {
-  content: String;
-  source_app: String;
+  content: string;
+  source_app: string;
   distance: number;
-  created_at: String;
+  created_at: string;
 }
 
 const samples = ref<Sample[]>([]);
@@ -19,7 +19,7 @@ const fetchSamples = async () => {
   }
 };
 
-const openDeepBridge = async (content: String) => {
+const openDeepBridge = async (content: string) => {
   try {
     await invoke('open_deep_bridge', { content });
   } catch (error) {

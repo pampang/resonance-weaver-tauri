@@ -1,3 +1,4 @@
+#![recursion_limit = "1024"]
 mod config;
 mod services;
 
@@ -8,6 +9,8 @@ use crate::services::indexer::Indexer;
 use crate::services::db::Database;
 use crate::services::funnel::Funnel;
 use crate::services::clipboard::ClipboardListener;
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::menu::{Menu, MenuItem};
 
 struct AppState {
     vector_store: Arc<VectorStore>,
@@ -15,7 +18,6 @@ struct AppState {
     db: Arc<Database>,
 }
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -53,11 +55,39 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
+            
+            let show = MenuItem::with_id(app, "show", "Show Hub", true, None::<&str>).unwrap();
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).unwrap();
+            let menu = Menu::with_items(app, &[&show, &quit]).unwrap();
+
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        let window = app.get_webview_window("main").unwrap();
+                        window.show().unwrap();
+                        window.set_focus().unwrap();
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|_tray, event| {
+                    if let TrayIconEvent::Click { .. } = event {
+                        // Handle click
+                    }
+                })
+                .build(app)
+                .unwrap();
+
             tauri::async_runtime::block_on(async move {
                 let db = Arc::new(Database::new(&handle).expect("failed to init db"));
-                db.purge_old_records().expect("failed to purge records");
+                let _ = db.purge_old_records();
                 
                 let vector_store = Arc::new(VectorStore::new(&handle).await.expect("failed to init vector store"));
                 let indexer = Arc::new(Indexer::new(vector_store.clone(), handle.clone()));

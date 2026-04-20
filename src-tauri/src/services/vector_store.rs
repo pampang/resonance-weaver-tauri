@@ -1,10 +1,9 @@
 use lancedb::connection::Connection;
 use lancedb::table::Table;
-use lancedb::query::{Executable, QueryBase};
 use lancedb::connect;
-use arrow::array::{Float32Array, StringArray, RecordBatch, Int64Array};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::array::{ArrayRef, FixedSizeListArray};
+use arrow_array::{Float32Array, StringArray, RecordBatch, Int64Array, ArrayRef, FixedSizeListArray};
+use arrow_schema::{DataType, Field, Schema};
+use lancedb::query::{ExecutableQuery, QueryBase};
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
@@ -60,11 +59,13 @@ impl VectorStore {
         let text_array = StringArray::from(vec!["dummy"]);
         let metadata_array = StringArray::from(vec![None as Option<&str>]);
         
-        let vector_data = vec![0.0f32; 768];
-        let vector_array = FixedSizeListArray::from_iter_values(
-            vec![Float32Array::from(vector_data)].into_iter(),
-            768
-        );
+        let vector_values = Float32Array::from(vec![0.0f32; 768]);
+        let vector_array = FixedSizeListArray::try_new(
+            Arc::new(Field::new("item", DataType::Float32, true)),
+            768,
+            Arc::new(vector_values),
+            None
+        ).map_err(|e| e.to_string())?;
 
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -104,10 +105,13 @@ impl VectorStore {
         let text_array = StringArray::from(vec![text]);
         let metadata_array = StringArray::from(vec![metadata]);
         
-        let vector_array = FixedSizeListArray::from_iter_values(
-            vec![Float32Array::from(embedding)].into_iter(),
-            768
-        );
+        let vector_values = Float32Array::from(embedding);
+        let vector_array = FixedSizeListArray::try_new(
+            Arc::new(Field::new("item", DataType::Float32, true)),
+            768,
+            Arc::new(vector_values),
+            None
+        ).map_err(|e| e.to_string())?;
 
         let batch = RecordBatch::try_new(
             schema,
@@ -124,12 +128,10 @@ impl VectorStore {
     }
 
     pub async fn search(&self, vector: Vec<f32>, limit: usize) -> Result<Vec<(String, f32)>, String> {
-        let mut results = self.table
-            .search(lancedb::query::QueryData::Vectors(vector))
-            .limit(limit)
-            .execute()
-            .await
-            .map_err(|e| e.to_string())?;
+        let query = self.table.query();
+        let query = query.nearest_to(vector).map_err(|e| e.to_string())?.limit(limit);
+        
+        let mut results = query.execute().await.map_err(|e| e.to_string())?;
 
         let mut matches = Vec::new();
         while let Some(batch) = results.next().await {
