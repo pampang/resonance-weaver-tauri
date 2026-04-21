@@ -2,9 +2,17 @@ use std::process::Command;
 use crate::services::vector_store::VectorStore;
 use crate::services::db::Database;
 use crate::config;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager, Emitter};
 use std::sync::Arc;
 use log::{info};
+use serde::Serialize;
+
+#[derive(Clone, Serialize)]
+struct ResonancePayload {
+    app_name: String,
+    score: f32,
+    content: String,
+}
 
 pub struct Funnel {
     app_handle: AppHandle,
@@ -18,39 +26,40 @@ impl Funnel {
     }
 
     pub async fn process_clipboard(&self, content: String) -> Result<(), String> {
-        // Tier 1: Metadata (Length)
         if content.len() < 10 || content.len() > 10000 {
             return Ok(());
         }
 
-        // Tier 2: Whitelist
         let app_name = self.get_frontmost_app()?;
         let config = config::load_config(&self.app_handle);
         if !config.app_whitelist.iter().any(|a| app_name.to_lowercase().contains(&a.to_lowercase())) {
-            info!("Skipping clipboard from non-whitelisted app: {}", app_name);
             return Ok(());
         }
 
-        info!("Processing resonance for app: {}", app_name);
-
-        // Tier 3: Search Resonance
         let embedding = VectorStore::get_embedding(&content).await?;
         let matches = self.vector_store.search(embedding, 3).await?;
 
         if !matches.is_empty() {
-            // Found resonance! Store in triage buffer (SQLite)
-            info!("Resonance found! Saving to triage buffer.");
             let matched_text = matches[0].0.clone();
-            self.db.add_sample(content, matched_text, app_name.clone(), matches[0].1).await?;
+            let score = 1.0 - matches[0].1;
 
-            // Send notification
-            use tauri_plugin_notification::NotificationExt;
-            self.app_handle.notification()
-                .builder()
-                .title("New Resonance Found")
-                .body(format!("Resonance detected from {}", app_name))
-                .show()
-                .unwrap();
+            if score < config.threshold {
+                return Ok(());
+            }
+
+            info!("Resonance found! Score: {:.2}", score);
+            self.db.add_sample(content.clone(), matched_text, app_name.clone(), matches[0].1).await?;
+
+            // Trigger the Bubble Window
+            if let Some(window) = self.app_handle.get_webview_window("resonance-bubble") {
+                let _ = window.emit("new-resonance", ResonancePayload {
+                    app_name,
+                    score,
+                    content,
+                });
+                let _ = window.show();
+                let _ = window.unminimize();
+            }
         }
 
         Ok(())

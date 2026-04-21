@@ -3,7 +3,7 @@ mod config;
 mod services;
 
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 use crate::services::vector_store::VectorStore;
 use crate::services::indexer::Indexer;
 use crate::services::db::Database;
@@ -34,7 +34,6 @@ async fn save_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle, c
     info!("Saving configuration...");
     config::save_config(&app, &config)?;
     state._indexer.rebuild_watcher().await?;
-    // Automatically trigger a scan when config changes
     let _ = state._indexer.trigger_full_index().await;
     Ok(())
 }
@@ -53,6 +52,11 @@ async fn search_resonance(state: tauri::State<'_, AppState>, text: String) -> Re
 #[tauri::command]
 fn get_samples(state: tauri::State<'_, AppState>) -> Result<Vec<services::db::Sample>, String> {
     state.db.get_samples()
+}
+
+#[tauri::command]
+fn delete_sample(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+    state.db.delete_sample(id)
 }
 
 #[tauri::command]
@@ -89,6 +93,14 @@ fn get_running_apps() -> Result<Vec<String>, String> {
     Ok(apps)
 }
 
+#[tauri::command]
+fn show_main_window(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -109,18 +121,13 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         let window = app.get_webview_window("main").unwrap();
-                        window.show().unwrap();
-                        window.set_focus().unwrap();
+                        let _ = window.show();
+                        let _ = window.set_focus();
                     }
                     "quit" => {
                         app.exit(0);
                     }
                     _ => {}
-                })
-                .on_tray_icon_event(|_tray, event| {
-                    if let TrayIconEvent::Click { .. } = event {
-                        // Handle click
-                    }
                 })
                 .build(app)
                 .unwrap();
@@ -144,7 +151,11 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, get_config, save_config, search_resonance, get_samples, open_deep_bridge, reindex, get_running_apps])
+        .invoke_handler(tauri::generate_handler![
+            greet, get_config, save_config, search_resonance, 
+            get_samples, delete_sample, open_deep_bridge, 
+            reindex, get_running_apps, show_main_window
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

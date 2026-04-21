@@ -12,9 +12,22 @@
   "app": {
     "windows": [
       {
-        "title": "tauri-app",
+        "label": "main",
+        "title": "Resonance Weaver",
         "width": 800,
         "height": 600
+      },
+      {
+        "label": "resonance-bubble",
+        "title": "New Resonance",
+        "width": 300,
+        "height": 120,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "resizable": false,
+        "skipTaskbar": true
       }
     ],
     "security": {

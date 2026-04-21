@@ -3,11 +3,13 @@ import { ref, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 
 interface Sample {
+  id: number;
   content: string;
   matched_content: string | null;
   source_app: string;
   distance: number;
   created_at: string;
+  expanded?: boolean;
 }
 
 const samples = ref<Sample[]>([]);
@@ -15,11 +17,19 @@ const is_loading = ref(true);
 
 const fetchSamples = async () => {
   try {
-    samples.value = await invoke('get_samples');
+    const data = await invoke('get_samples') as Sample[];
+    samples.value = data.map(s => ({ ...s, expanded: false }));
   } catch (error) {
     console.error('Failed to fetch samples:', error);
   } finally {
     is_loading.value = false;
+  }
+};
+
+const deleteSample = async (id: number) => {
+  if (confirm('Delete this resonance?')) {
+    await invoke('delete_sample', { id });
+    await fetchSamples();
   }
 };
 
@@ -36,7 +46,7 @@ const openDeepBridge = async (sample: Sample) => {
 
 const formatDate = (dateStr: string) => {
   try {
-    const date = new Date(dateStr + 'Z'); // Assume UTC from SQLite
+    const date = new Date(dateStr + 'Z');
     return date.toLocaleString();
   } catch {
     return dateStr;
@@ -60,22 +70,22 @@ onMounted(() => {
     <div v-else-if="samples.length === 0" class="state-msg">
       <div class="empty-icon">📡</div>
       <p>No resonances detected yet.</p>
-      <p class="sub">Monitor whitelisted apps and copy text to see them here.</p>
     </div>
 
-    <div v-else class="samples-grid">
-      <div v-for="sample in samples" :key="sample.created_at" class="sample-card">
+    <div v-else class="samples-list">
+      <div v-for="sample in samples" :key="sample.id" class="sample-card">
         <div class="card-top">
           <div class="app-badge">{{ sample.source_app }}</div>
           <div class="resonance-score">
-            <div class="score-label">Resonance</div>
+            <div class="score-label">{{ ((1 - sample.distance) * 100).toFixed(0) }}% Resonance</div>
             <div class="score-bar-bg">
               <div class="score-bar-fill" :style="{ width: `${Math.max(0, (1 - sample.distance) * 100)}%` }"></div>
             </div>
           </div>
+          <button class="delete-btn" @click="deleteSample(sample.id)" title="Delete">✕</button>
         </div>
         
-        <div class="content-sections">
+        <div class="content-sections" :class="{ 'is-expanded': sample.expanded }">
           <div class="content-box captured">
             <label>CAPTURED</label>
             <div class="text">{{ sample.content }}</div>
@@ -86,6 +96,10 @@ onMounted(() => {
             <div class="text">{{ sample.matched_content }}</div>
           </div>
         </div>
+
+        <button class="expand-toggle" @click="sample.expanded = !sample.expanded">
+          {{ sample.expanded ? 'Show Less ↑' : 'Read Full Context ↓' }}
+        </button>
 
         <div class="card-bottom">
           <span class="timestamp">{{ formatDate(sample.created_at) }}</span>
@@ -113,48 +127,12 @@ onMounted(() => {
   margin-bottom: 24px;
 }
 
-h2 {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 700;
-}
-
-.refresh-btn {
-  background: transparent;
-  border: 1px solid #333;
-  color: #888;
-  padding: 6px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-
-.refresh-btn:hover {
-  border-color: #646cff;
-  color: #646cff;
-}
-
-.state-msg {
-  text-align: center;
-  margin-top: 80px;
-  color: #666;
-}
-
-.empty-icon {
-  font-size: 3rem;
-  margin-bottom: 16px;
-}
-
-.sub {
-  font-size: 0.9rem;
-  max-width: 300px;
-  margin: 8px auto;
-}
-
-.samples-grid {
-  display: grid;
-  gap: 24px;
-  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+.samples-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 900px;
+  margin: 0 auto;
 }
 
 .sample-card {
@@ -164,11 +142,21 @@ h2 {
   padding: 20px;
   display: flex;
   flex-direction: column;
-  transition: transform 0.2s, border-color 0.2s;
+  position: relative;
 }
 
-.sample-card:hover {
-  border-color: #444;
+.delete-btn {
+  background: transparent;
+  border: none;
+  color: #444;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  margin-left: 12px;
+}
+
+.delete-btn:hover {
+  color: #ff4d4d;
 }
 
 .card-top {
@@ -185,58 +173,48 @@ h2 {
   border-radius: 6px;
   font-size: 0.75rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 .resonance-score {
-  width: 100px;
+  flex-grow: 1;
+  margin-left: 20px;
 }
 
 .score-label {
   font-size: 0.7rem;
   color: #666;
-  text-align: right;
   margin-bottom: 4px;
 }
 
 .score-bar-bg {
-  height: 6px;
+  height: 4px;
   background: #333;
-  border-radius: 3px;
-  overflow: hidden;
+  border-radius: 2px;
 }
 
 .score-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #646cff, #9089ff);
-  border-radius: 3px;
+  background: #646cff;
+  border-radius: 2px;
 }
 
 .content-sections {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 20px;
-  flex-grow: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.is-expanded .text {
+  display: block !important;
+  -webkit-line-clamp: unset !important;
+  max-height: unset !important;
 }
 
 .content-box {
-  padding: 10px;
+  padding: 12px;
   border-radius: 8px;
   font-size: 0.9rem;
-}
-
-.content-box label {
-  display: block;
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: #555;
-  margin-bottom: 4px;
-  text-transform: uppercase;
-}
-
-.captured {
   background: #222;
 }
 
@@ -246,20 +224,32 @@ h2 {
 }
 
 .text {
-  line-height: 1.4;
+  line-height: 1.5;
   color: #ccc;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  max-height: 7.5em;
+}
+
+.expand-toggle {
+  background: transparent;
+  border: none;
+  color: #646cff;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 8px 0;
+  text-align: center;
+  width: 100%;
+  border-bottom: 1px solid #2a2a2a;
+  margin-bottom: 12px;
 }
 
 .card-bottom {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-top: 16px;
-  border-top: 1px solid #2a2a2a;
 }
 
 .timestamp {
@@ -273,13 +263,7 @@ h2 {
   border: none;
   padding: 8px 16px;
   border-radius: 6px;
-  font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
-}
-
-.synthesis-btn:hover {
-  background: #535bf2;
 }
 </style>

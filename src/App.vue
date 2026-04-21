@@ -1,21 +1,33 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted } from "vue";
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import TriageList from "./components/TriageList.vue";
 import ConfigPanel from "./components/ConfigPanel.vue";
+import ResonanceBubble from "./components/ResonanceBubble.vue";
 
+const windowLabel = getCurrentWebviewWindow().label;
 const currentTab = ref('triage');
+
+const isMain = windowLabel === 'main';
+const isBubble = windowLabel === 'resonance-bubble';
 </script>
 
 <template>
-  <main class="container">
-    <nav class="tabs">
-      <button :class="{ active: currentTab === 'triage' }" @click="currentTab = 'triage'">Triage Hub</button>
-      <button :class="{ active: currentTab === 'config' }" @click="currentTab = 'config'">Configuration</button>
-    </nav>
+  <div class="app-root" :class="{ 'bubble-mode': isBubble }">
+    <!-- Main Window Layout -->
+    <main v-if="isMain" class="container">
+      <nav class="tabs">
+        <button :class="{ active: currentTab === 'triage' }" @click="currentTab = 'triage'">Triage Hub</button>
+        <button :class="{ active: currentTab === 'config' }" @click="currentTab = 'config'">Configuration</button>
+      </nav>
 
-    <TriageList v-if="currentTab === 'triage'" />
-    <ConfigPanel v-if="currentTab === 'config'" />
-  </main>
+      <TriageList v-if="currentTab === 'triage'" />
+      <ConfigPanel v-if="currentTab === 'config'" />
+    </main>
+
+    <!-- Bubble Window Layout -->
+    <ResonanceBubble v-if="isBubble" />
+  </div>
 </template>
 
 <style>
@@ -26,10 +38,20 @@ const currentTab = ref('triage');
 body {
   margin: 0;
   padding: 0;
+  background-color: transparent; /* Essential for transparent windows */
 }
 </style>
 
 <style scoped>
+.app-root {
+  width: 100%;
+  height: 100%;
+}
+
+.bubble-mode {
+  background: transparent;
+}
+
 .container {
   margin: 0;
   padding: 0;
@@ -49,6 +71,7 @@ body {
   padding: 10px;
   gap: 10px;
   border-bottom: 1px solid #333;
+  flex-shrink: 0;
 }
 
 .tabs button {
