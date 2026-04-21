@@ -4,7 +4,7 @@ use lancedb::connect;
 use arrow_array::{Float32Array, StringArray, RecordBatch, Int64Array, ArrayRef, FixedSizeListArray};
 use arrow_schema::{DataType, Field, Schema};
 use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::distance::DistanceType;
+use lancedb::DistanceType;
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use reqwest::Client;

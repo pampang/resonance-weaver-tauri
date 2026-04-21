@@ -3,25 +3,21 @@ mod config;
 mod services;
 
 use std::sync::Arc;
-use tauri::{Manager, Emitter};
+use tauri::Manager;
 use crate::services::vector_store::VectorStore;
 use crate::services::indexer::Indexer;
 use crate::services::db::Database;
 use crate::services::funnel::Funnel;
 use crate::services::clipboard::ClipboardListener;
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::tray::TrayIconBuilder;
 use tauri::menu::{Menu, MenuItem};
-use log::{info, error};
+use log::info;
+use arboard::Clipboard;
 
 struct AppState {
     vector_store: Arc<VectorStore>,
     _indexer: Arc<Indexer>,
     db: Arc<Database>,
-}
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
 #[tauri::command]
@@ -44,12 +40,6 @@ async fn reindex(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn search_resonance(state: tauri::State<'_, AppState>, text: String) -> Result<Vec<(String, f32)>, String> {
-    let embedding = VectorStore::get_embedding(&text).await?;
-    state.vector_store.search(embedding, 3).await
-}
-
-#[tauri::command]
 fn get_samples(state: tauri::State<'_, AppState>) -> Result<Vec<services::db::Sample>, String> {
     state.db.get_samples()
 }
@@ -60,7 +50,7 @@ fn delete_sample(state: tauri::State<'_, AppState>, id: i64) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn open_deep_bridge(content: String, matched_content: Option<String>) -> Result<(), String> {
+fn open_deep_bridge(content: String, matched_content: Option<String>) -> Result<String, String> {
     let prompt = if let Some(matched) = matched_content {
         format!(
             "Please synthesize and analyze the relationship between the following two pieces of information:\n\n### CAPTURED CONTENT (from clipboard):\n{}\n\n### ASSOCIATED KNOWLEDGE (from my local library):\n{}\n\nProvide a deep synthesis that integrates these concepts.",
@@ -70,8 +60,15 @@ fn open_deep_bridge(content: String, matched_content: Option<String>) -> Result<
         content
     };
     
-    let url = format!("https://gemini.google.com/app?prompt={}", urlencoding::encode(&prompt));
-    open::that(url).map_err(|e| e.to_string())
+    // 1. Copy to clipboard
+    let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
+    cb.set_text(prompt.clone()).map_err(|e| e.to_string())?;
+    
+    // 2. Open Gemini
+    let url = "https://gemini.google.com/app";
+    open::that(url).map_err(|e| e.to_string())?;
+
+    Ok("Synthesized prompt copied to clipboard! Paste it into Gemini.".to_string())
 }
 
 #[tauri::command]
@@ -152,7 +149,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet, get_config, save_config, search_resonance, 
+            get_config, save_config, search_resonance, 
             get_samples, delete_sample, open_deep_bridge, 
             reindex, get_running_apps, show_main_window
         ])

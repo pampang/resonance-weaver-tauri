@@ -14,6 +14,7 @@ interface Sample {
 
 const samples = ref<Sample[]>([]);
 const is_loading = ref(true);
+const toastMsg = ref('');
 
 const fetchSamples = async () => {
   try {
@@ -27,30 +28,44 @@ const fetchSamples = async () => {
 };
 
 const deleteSample = async (id: number) => {
-  if (confirm('Delete this resonance?')) {
-    await invoke('delete_sample', { id });
-    await fetchSamples();
-  }
+  await invoke('delete_sample', { id });
+  await fetchSamples();
 };
 
 const openDeepBridge = async (sample: Sample) => {
   try {
-    await invoke('open_deep_bridge', { 
+    const msg = await invoke('open_deep_bridge', { 
       content: sample.content, 
       matchedContent: sample.matched_content 
-    });
+    }) as string;
+    showToast(msg);
   } catch (error) {
     console.error('Failed to open deep bridge:', error);
   }
 };
 
+const showToast = (msg: string) => {
+  toastMsg.value = msg;
+  setTimeout(() => { toastMsg.value = ''; }, 4000);
+};
+
 const formatDate = (dateStr: string) => {
   try {
     const date = new Date(dateStr + 'Z');
-    return date.toLocaleString();
+    return date.toLocaleString(undefined, { 
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+    });
   } catch {
     return dateStr;
   }
+};
+
+// Map score to a human-friendly resonance level
+const getResonanceLabel = (distance: number) => {
+  const score = 1 - distance;
+  if (score > 0.9) return { text: 'Core Resonance', class: 'high' };
+  if (score > 0.75) return { text: 'Strong Link', class: 'mid' };
+  return { text: 'Semantic Echo', class: 'low' };
 };
 
 onMounted(() => {
@@ -62,50 +77,78 @@ onMounted(() => {
 <template>
   <div class="triage-hub">
     <div class="header">
-      <h2>Triage Hub</h2>
-      <button class="refresh-btn" @click="fetchSamples">Refresh</button>
+      <div class="title-group">
+        <h2>Triage Hub</h2>
+        <span class="count-badge">{{ samples.length }} Resonances</span>
+      </div>
+      <button class="refresh-btn" @click="fetchSamples">
+        <span class="icon">🔄</span> Refresh
+      </button>
     </div>
 
-    <div v-if="is_loading && samples.length === 0" class="state-msg">Loading resonances...</div>
+    <!-- Toast Notification -->
+    <Transition name="fade">
+      <div v-if="toastMsg" class="toast">{{ toastMsg }}</div>
+    </Transition>
+
+    <div v-if="is_loading && samples.length === 0" class="state-msg">
+      <div class="loader"></div>
+      <p>Synchronizing with Knowledge Base...</p>
+    </div>
+    
     <div v-else-if="samples.length === 0" class="state-msg">
       <div class="empty-icon">📡</div>
-      <p>No resonances detected yet.</p>
+      <p>Your library is silent.</p>
+      <p class="sub">Copy text from whitelisted apps to trigger a resonance.</p>
     </div>
 
-    <div v-else class="samples-list">
+    <div v-else class="samples-stack">
       <div v-for="sample in samples" :key="sample.id" class="sample-card">
-        <div class="card-top">
-          <div class="app-badge">{{ sample.source_app }}</div>
-          <div class="resonance-score">
-            <div class="score-label">{{ Math.max(0, (1 - sample.distance) * 100).toFixed(0) }}% Resonance</div>
-            <div class="score-bar-bg">
-              <div class="score-bar-fill" :style="{ width: `${Math.max(0, (1 - sample.distance) * 100)}%` }"></div>
-            </div>
-          </div>
-          <button class="delete-btn" @click="deleteSample(sample.id)" title="Delete">✕</button>
-        </div>
-        
-        <div class="content-sections" :class="{ 'is-expanded': sample.expanded }">
-          <div class="content-box captured">
-            <label>CAPTURED</label>
-            <div class="text">{{ sample.content }}</div>
+        <div class="card-header">
+          <div class="app-info">
+            <span class="app-dot"></span>
+            <span class="app-name">{{ sample.source_app }}</span>
           </div>
           
-          <div v-if="sample.matched_content" class="content-box matched">
-            <label>MATCHED KNOWLEDGE</label>
-            <div class="text">{{ sample.matched_content }}</div>
+          <div class="resonance-meta" :class="getResonanceLabel(sample.distance).class">
+            <span class="label">{{ getResonanceLabel(sample.distance).text }}</span>
+            <span class="percent">{{ ((1 - sample.distance) * 100).toFixed(0) }}%</span>
+          </div>
+
+          <button class="delete-icon" @click="deleteSample(sample.id)">✕</button>
+        </div>
+        
+        <div class="content-flow">
+          <!-- Captured Section -->
+          <div class="box captured">
+            <div class="box-header">Captured Fragment</div>
+            <div class="text" :class="{ 'expanded': sample.expanded }">{{ sample.content }}</div>
+          </div>
+
+          <!-- Connecting Icon -->
+          <div class="flow-connector">
+            <div class="line"></div>
+            <div class="pulse-node"></div>
+            <div class="line"></div>
+          </div>
+          
+          <!-- Matched Knowledge Section -->
+          <div v-if="sample.matched_content" class="box matched">
+            <div class="box-header">Associated Knowledge</div>
+            <div class="text" :class="{ 'expanded': sample.expanded }">{{ sample.matched_content }}</div>
           </div>
         </div>
 
-        <button class="expand-toggle" @click="sample.expanded = !sample.expanded">
-          {{ sample.expanded ? 'Show Less ↑' : 'Read Full Context ↓' }}
-        </button>
-
-        <div class="card-bottom">
-          <span class="timestamp">{{ formatDate(sample.created_at) }}</span>
-          <button class="synthesis-btn" @click="openDeepBridge(sample)">
-            Deep Synthesis
-          </button>
+        <div class="card-footer">
+          <span class="time">{{ formatDate(sample.created_at) }}</span>
+          <div class="actions">
+            <button class="expand-btn" @click="sample.expanded = !sample.expanded">
+              {{ sample.expanded ? 'Show Less' : 'Full Text' }}
+            </button>
+            <button class="synthesis-btn" @click="openDeepBridge(sample)">
+              Synthesize with Gemini
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -114,156 +157,269 @@ onMounted(() => {
 
 <style scoped>
 .triage-hub {
-  padding: 24px;
+  padding: 32px;
   flex-grow: 1;
   overflow-y: auto;
-  background: #0f0f0f;
+  background: radial-gradient(circle at top right, #161625, #0f0f0f);
+  position: relative;
 }
 
 .header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 32px;
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 800;
+  background: linear-gradient(to right, #fff, #888);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.count-badge {
+  font-size: 0.8rem;
+  color: #666;
+  font-weight: 500;
+}
+
+.refresh-btn {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #aaa;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.refresh-btn:hover {
+  border-color: #646cff;
+  color: #fff;
+}
+
+/* Toast Styling */
+.toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #646cff;
+  color: white;
+  padding: 12px 24px;
+  border-radius: 50px;
+  font-weight: 600;
+  box-shadow: 0 10px 25px rgba(100, 108, 255, 0.4);
+  z-index: 1000;
+}
+
+.samples-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.sample-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 24px;
+  position: relative;
+  transition: border-color 0.3s, transform 0.3s;
+}
+
+.sample-card:hover {
+  border-color: rgba(100, 108, 255, 0.3);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 24px;
 }
 
-.samples-list {
+.app-info {
   display: flex;
-  flex-direction: column;
-  gap: 20px;
-  max-width: 900px;
-  margin: 0 auto;
+  align-items: center;
+  gap: 8px;
 }
 
-.sample-card {
-  background: #1a1a1a;
-  border: 1px solid #333;
-  border-radius: 12px;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  position: relative;
+.app-dot {
+  width: 8px;
+  height: 8px;
+  background: #646cff;
+  border-radius: 50%;
+  box-shadow: 0 0 10px #646cff;
 }
 
-.delete-btn {
+.app-name {
+  font-weight: 700;
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.resonance-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 4px 12px;
+  border-radius: 50px;
+}
+
+.resonance-meta.high { color: #b794ff; }
+.resonance-meta.mid { color: #64d2ff; }
+.resonance-meta.low { color: #888; }
+
+.resonance-meta .percent {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 800;
+}
+
+.delete-icon {
   background: transparent;
   border: none;
-  color: #444;
-  font-size: 1.2rem;
+  color: #333;
   cursor: pointer;
-  padding: 4px 8px;
-  margin-left: 12px;
+  font-size: 1.1rem;
 }
 
-.delete-btn:hover {
-  color: #ff4d4d;
-}
+.delete-icon:hover { color: #ff4d4d; }
 
-.card-top {
+.content-flow {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
+  flex-direction: column;
 }
 
-.app-badge {
-  background: #646cff22;
-  color: #747bff;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-weight: 600;
+.box {
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
-.resonance-score {
-  flex-grow: 1;
-  margin-left: 20px;
-}
-
-.score-label {
-  font-size: 0.7rem;
-  color: #666;
-  margin-bottom: 4px;
-}
-
-.score-bar-bg {
-  height: 4px;
-  background: #333;
-  border-radius: 2px;
-}
-
-.score-bar-fill {
-  height: 100%;
-  background: #646cff;
-  border-radius: 2px;
-}
-
-.content-sections {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-
-.is-expanded .text {
-  display: block !important;
-  -webkit-line-clamp: unset !important;
-  max-height: unset !important;
-}
-
-.content-box {
-  padding: 12px;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  background: #222;
-}
-
-.matched {
-  background: #1e251e;
-  border-left: 3px solid #4CAF50;
+.box-header {
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #555;
+  margin-bottom: 8px;
+  letter-spacing: 1px;
 }
 
 .text {
-  line-height: 1.5;
+  font-size: 1rem;
+  line-height: 1.6;
   color: #ccc;
   display: -webkit-box;
-  -webkit-line-clamp: 5;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  max-height: 7.5em;
 }
 
-.expand-toggle {
-  background: transparent;
-  border: none;
-  color: #646cff;
-  font-size: 0.8rem;
-  cursor: pointer;
-  padding: 8px 0;
-  text-align: center;
-  width: 100%;
-  border-bottom: 1px solid #2a2a2a;
-  margin-bottom: 12px;
+.text.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
 }
 
-.card-bottom {
+.flow-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 40px;
+}
+
+.line {
+  width: 1px;
+  flex-grow: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.pulse-node {
+  width: 6px;
+  height: 6px;
+  background: #646cff;
+  border-radius: 50%;
+  margin: 4px 0;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.5); opacity: 0.5; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.matched {
+  background: rgba(76, 175, 80, 0.05);
+  border-left: 2px solid rgba(76, 175, 80, 0.3);
+}
+
+.card-footer {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.timestamp {
+.time {
   font-size: 0.75rem;
+  color: #444;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+.expand-btn {
+  background: transparent;
+  border: 1px solid #333;
   color: #666;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
 }
 
 .synthesis-btn {
   background: #646cff;
   color: white;
   border: none;
-  padding: 8px 16px;
-  border-radius: 6px;
-  font-weight: 600;
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 0.85rem;
   cursor: pointer;
+  box-shadow: 0 4px 15px rgba(100, 108, 255, 0.2);
 }
+
+.synthesis-btn:hover {
+  background: #535bf2;
+  transform: translateY(-1px);
+}
+
+/* Transitions */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.5s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.state-msg {
+  text-align: center;
+  margin-top: 100px;
+  color: #444;
+}
+
+.empty-icon { font-size: 4rem; margin-bottom: 20px; opacity: 0.2; }
 </style>
