@@ -1,12 +1,21 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 interface Config {
   kb_sources: string[];
   app_whitelist: string[];
   threshold: number;
+}
+
+interface IndexingProgress {
+  total_files: number;
+  current_file: number;
+  file_name: string;
+  percentage: number;
+  is_complete: boolean;
 }
 
 const config = ref<Config>({
@@ -19,6 +28,9 @@ const app_whitelist_str = ref('');
 const running_apps = ref<string[]>([]);
 const is_saving = ref(false);
 const is_reindexing = ref(false);
+const progress = ref<IndexingProgress | null>(null);
+
+let unlistenProgress: UnlistenFn | null = null;
 
 const loadConfig = async () => {
   const c = await invoke('get_config') as Config;
@@ -31,7 +43,6 @@ const saveConfig = async () => {
   config.value.app_whitelist = app_whitelist_str.value.split(',').map(s => s.trim()).filter(s => s !== '');
   try {
     await invoke('save_config', { config: config.value });
-    alert('Configuration saved and watcher updated.');
   } finally {
     is_saving.value = false;
   }
@@ -53,13 +64,13 @@ const removeSource = (index: number) => {
 
 const triggerReindex = async () => {
   is_reindexing.value = true;
+  progress.value = null;
   try {
     await invoke('reindex');
-    alert('Full reindexing triggered. Check logs for progress.');
   } catch (e) {
-    alert('Error during reindexing: ' + e);
+    alert('Error: ' + e);
   } finally {
-    is_reindexing.value = false;
+    // We don't set is_reindexing false here, we wait for progress.is_complete
   }
 };
 
@@ -79,9 +90,21 @@ const addToWhitelist = (appName: string) => {
   }
 };
 
-onMounted(() => {
+onMounted(async () => {
   loadConfig();
   fetchRunningApps();
+  
+  unlistenProgress = await listen<IndexingProgress>('indexing-progress', (event) => {
+    progress.value = event.payload;
+    if (event.payload.is_complete) {
+      is_reindexing.value = false;
+      setTimeout(() => { progress.value = null; }, 3000);
+    }
+  });
+});
+
+onUnmounted(() => {
+  if (unlistenProgress) unlistenProgress();
 });
 </script>
 
@@ -92,6 +115,17 @@ onMounted(() => {
       <button class="reindex-btn" :disabled="is_reindexing" @click="triggerReindex">
         {{ is_reindexing ? 'Indexing...' : 'Reindex All Now' }}
       </button>
+    </div>
+
+    <!-- Progress Overlay -->
+    <div v-if="progress" class="progress-section">
+      <div class="progress-info">
+        <span>Indexing: {{ progress.file_name }}</span>
+        <span>{{ progress.current_file }} / {{ progress.total_files }}</span>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" :style="{ width: `${progress.percentage}%` }"></div>
+      </div>
     </div>
 
     <div class="section">
@@ -145,6 +179,35 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+}
+
+.progress-section {
+  background: #1e1e2e;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  border: 1px solid #646cff44;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: #ccc;
+  margin-bottom: 8px;
+}
+
+.progress-bar-bg {
+  height: 8px;
+  background: #333;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: #646cff;
+  transition: width 0.3s ease;
 }
 
 .section {

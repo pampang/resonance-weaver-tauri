@@ -1,11 +1,21 @@
 use crate::services::vector_store::VectorStore;
 use notify::{Watcher, RecursiveMode, Event, RecommendedWatcher};
 use std::path::PathBuf;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use std::sync::Arc;
 use crate::config;
 use log::{info, error};
 use tokio::sync::Mutex;
+use serde::Serialize;
+
+#[derive(Clone, Serialize)]
+struct IndexingProgress {
+    total_files: usize,
+    current_file: usize,
+    file_name: String,
+    percentage: f32,
+    is_complete: bool,
+}
 
 pub struct Indexer {
     vector_store: Arc<VectorStore>,
@@ -43,10 +53,7 @@ impl Indexer {
         for source in &config.kb_sources {
             let path = PathBuf::from(source);
             if path.exists() {
-                info!("Watching source: {:?}", path);
-                watcher.watch(&path, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
-            } else {
-                error!("Source path does not exist: {:?}", path);
+                let _ = watcher.watch(&path, RecursiveMode::Recursive);
             }
         }
 
@@ -54,7 +61,6 @@ impl Indexer {
             while let Some(event) = rx.recv().await {
                 for path in event.paths {
                     if path.is_file() {
-                        info!("File change detected: {:?}", path);
                         let _ = Self::index_file(&vector_store, path).await;
                     }
                 }
@@ -63,66 +69,103 @@ impl Indexer {
 
         let mut w = self.watcher.lock().await;
         *w = Some(watcher);
-
         Ok(())
     }
 
     pub async fn trigger_full_index(&self) -> Result<(), String> {
         let config = config::load_config(&self.app_handle);
-        info!("Starting full indexing of all sources...");
         
+        // 1. Collect all files first to calculate total
+        let mut files_to_index = Vec::new();
         for source in config.kb_sources {
             let path = PathBuf::from(source);
             if path.exists() {
-                self.index_directory(path).await?;
+                self.collect_files(path, &mut files_to_index).await;
             }
         }
+
+        let total = files_to_index.len();
+        info!("Starting full indexing of {} files...", total);
+
+        // 2. Index with progress reporting
+        for (i, path) in files_to_index.into_iter().enumerate() {
+            let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let percentage = (i as f32 / total as f32) * 100.0;
+            
+            let _ = self.app_handle.emit("indexing-progress", IndexingProgress {
+                total_files: total,
+                current_file: i + 1,
+                file_name,
+                percentage,
+                is_complete: false,
+            });
+
+            let _ = Self::index_file(&self.vector_store, path).await;
+        }
+
+        let _ = self.app_handle.emit("indexing-progress", IndexingProgress {
+            total_files: total,
+            current_file: total,
+            file_name: "Complete".to_string(),
+            percentage: 100.0,
+            is_complete: true,
+        });
+
         info!("Full indexing complete.");
         Ok(())
     }
 
-    async fn index_directory(&self, path: PathBuf) -> Result<(), String> {
+    async fn collect_files(&self, path: PathBuf, files: &mut Vec<PathBuf>) {
         if path.is_dir() {
-            for entry in std::fs::read_dir(path).map_err(|e| e.to_string())? {
-                let entry = entry.map_err(|e| e.to_string())?;
-                let path = entry.path();
-                if path.is_dir() {
-                    Box::pin(self.index_directory(path)).await?;
-                } else {
-                    let _ = Self::index_file(&self.vector_store, path).await;
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    let child_path = entry.path();
+                    if child_path.is_dir() {
+                        Box::pin(self.collect_files(child_path, files)).await;
+                    } else if self.is_allowed_file(&child_path) {
+                        files.push(child_path);
+                    }
                 }
             }
         }
-        Ok(())
+    }
+
+    fn is_allowed_file(&self, path: &PathBuf) -> bool {
+        if path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
+            return false;
+        }
+        let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let allowed = ["txt", "md", "markdown", "rs", "ts", "js", "py", "c", "cpp", "h"];
+        allowed.contains(&extension.as_str())
     }
 
     async fn index_file(vector_store: &VectorStore, path: PathBuf) -> Result<(), String> {
-        // Skip common binary files and hidden files
-        if path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
-            return Ok(());
-        }
-
-        let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-        let allowed_extensions = ["txt", "md", "markdown", "pdf", "docx", "rs", "ts", "js", "py", "c", "cpp", "h"];
-        if !allowed_extensions.contains(&extension.as_str()) {
-            return Ok(());
-        }
-
-        info!("Indexing file: {:?}", path);
         let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         
-        // Simple chunking logic for large files could be added here
-        let text = content.chars().take(2000).collect::<String>();
+        // --- Smart Chunking ---
+        // Split content into chunks of ~1000 characters with 200 overlap
+        let chunk_size = 1000;
+        let overlap = 200;
+        let mut start = 0;
+        let chars: Vec<char> = content.chars().collect();
         
-        match VectorStore::get_embedding(&text).await {
-            Ok(embedding) => {
-                let id = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-                vector_store.add_resonance(id, text, embedding, Some(path.to_string_lossy().to_string())).await?;
-                info!("Successfully indexed: {:?}", path);
+        while start < chars.len() {
+            let end = std::cmp::min(start + chunk_size, chars.len());
+            let chunk: String = chars[start..end].iter().collect();
+            
+            if !chunk.trim().is_empty() {
+                match VectorStore::get_embedding(&chunk).await {
+                    Ok(embedding) => {
+                        let id = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+                        let metadata = format!("{}:{}", path.to_string_lossy(), start);
+                        let _ = vector_store.add_resonance(id, chunk, embedding, Some(metadata)).await;
+                    }
+                    Err(e) => error!("Embedding error: {}", e),
+                }
             }
-            Err(e) => {
-                error!("Failed to get embedding for {:?}: {}", path, e);
-            }
+
+            start += chunk_size - overlap;
+            if start >= chars.len() { break; }
         }
         
         Ok(())
