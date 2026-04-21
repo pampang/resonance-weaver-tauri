@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 interface Sample {
   content: string;
+  matched_content: string | null;
   source_app: string;
   distance: number;
   created_at: string;
@@ -22,9 +23,12 @@ const fetchSamples = async () => {
   }
 };
 
-const openDeepBridge = async (content: string) => {
+const openDeepBridge = async (sample: Sample) => {
   try {
-    await invoke('open_deep_bridge', { content });
+    await invoke('open_deep_bridge', { 
+      content: sample.content, 
+      matchedContent: sample.matched_content 
+    });
   } catch (error) {
     console.error('Failed to open deep bridge:', error);
   }
@@ -71,13 +75,21 @@ onMounted(() => {
           </div>
         </div>
         
-        <div class="content-preview">
-          {{ sample.content }}
+        <div class="content-sections">
+          <div class="content-box captured">
+            <label>CAPTURED</label>
+            <div class="text">{{ sample.content }}</div>
+          </div>
+          
+          <div v-if="sample.matched_content" class="content-box matched">
+            <label>MATCHED KNOWLEDGE</label>
+            <div class="text">{{ sample.matched_content }}</div>
+          </div>
         </div>
 
         <div class="card-bottom">
           <span class="timestamp">{{ formatDate(sample.created_at) }}</span>
-          <button class="synthesis-btn" @click="openDeepBridge(sample.content)">
+          <button class="synthesis-btn" @click="openDeepBridge(sample)">
             Deep Synthesis
           </button>
         </div>
@@ -141,8 +153,8 @@ h2 {
 
 .samples-grid {
   display: grid;
-  gap: 20px;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 24px;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
 }
 
 .sample-card {
@@ -157,7 +169,6 @@ h2 {
 
 .sample-card:hover {
   border-color: #444;
-  transform: translateY(-2px);
 }
 
 .card-top {
@@ -202,16 +213,45 @@ h2 {
   border-radius: 3px;
 }
 
-.content-preview {
-  font-size: 0.95rem;
-  line-height: 1.5;
-  color: #ccc;
+.content-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   margin-bottom: 20px;
+  flex-grow: 1;
+}
+
+.content-box {
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.content-box label {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #555;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.captured {
+  background: #222;
+}
+
+.matched {
+  background: #1e251e;
+  border-left: 3px solid #4CAF50;
+}
+
+.text {
+  line-height: 1.4;
+  color: #ccc;
   display: -webkit-box;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  flex-grow: 1;
 }
 
 .card-bottom {

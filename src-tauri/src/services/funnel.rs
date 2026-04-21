@@ -40,7 +40,8 @@ impl Funnel {
         if !matches.is_empty() {
             // Found resonance! Store in triage buffer (SQLite)
             info!("Resonance found! Saving to triage buffer.");
-            self.db.add_sample(content, app_name.clone(), matches[0].1).await?;
+            let matched_text = matches[0].0.clone();
+            self.db.add_sample(content, matched_text, app_name.clone(), matches[0].1).await?;
 
             // Send notification
             use tauri_plugin_notification::NotificationExt;

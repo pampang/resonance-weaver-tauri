@@ -56,8 +56,17 @@ fn get_samples(state: tauri::State<'_, AppState>) -> Result<Vec<services::db::Sa
 }
 
 #[tauri::command]
-fn open_deep_bridge(content: String) -> Result<(), String> {
-    let url = format!("https://gemini.google.com/app?prompt={}", urlencoding::encode(&content));
+fn open_deep_bridge(content: String, matched_content: Option<String>) -> Result<(), String> {
+    let prompt = if let Some(matched) = matched_content {
+        format!(
+            "Please synthesize and analyze the relationship between the following two pieces of information:\n\n### CAPTURED CONTENT (from clipboard):\n{}\n\n### ASSOCIATED KNOWLEDGE (from my local library):\n{}\n\nProvide a deep synthesis that integrates these concepts.",
+            content, matched
+        )
+    } else {
+        content
+    };
+    
+    let url = format!("https://gemini.google.com/app?prompt={}", urlencoding::encode(&prompt));
     open::that(url).map_err(|e| e.to_string())
 }
 
