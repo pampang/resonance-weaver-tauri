@@ -7,9 +7,6 @@
     "core:default",
     "opener:default",
     "dialog:default",
-    "notification:default",
-    "fs:default",
-    "fs:allow-read-recursive",
-    "fs:allow-write-recursive"
+    "notification:default"
   ]
 }
