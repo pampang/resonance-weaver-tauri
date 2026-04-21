@@ -40,6 +40,12 @@ async fn reindex(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn search_resonance(state: tauri::State<'_, AppState>, text: String) -> Result<Vec<(String, f32)>, String> {
+    let embedding = VectorStore::get_embedding(&text).await?;
+    state.vector_store.search(embedding, 3).await
+}
+
+#[tauri::command]
 fn get_samples(state: tauri::State<'_, AppState>) -> Result<Vec<services::db::Sample>, String> {
     state.db.get_samples()
 }
@@ -66,7 +72,7 @@ fn open_deep_bridge(content: String, matched_content: Option<String>) -> Result<
     
     // 2. Open Gemini
     let url = "https://gemini.google.com/app";
-    open::that(url).map_err(|e| e.to_string())?;
+    let _ = open::that(url);
 
     Ok("Synthesized prompt copied to clipboard! Paste it into Gemini.".to_string())
 }

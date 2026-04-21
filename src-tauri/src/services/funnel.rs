@@ -2,16 +2,18 @@ use std::process::Command;
 use crate::services::vector_store::VectorStore;
 use crate::services::db::Database;
 use crate::config;
-use tauri::{AppHandle, Manager, Emitter};
+use tauri::{AppHandle, Manager, Emitter, LogicalPosition, Position};
 use std::sync::Arc;
 use log::{info};
 use serde::Serialize;
 
 #[derive(Clone, Serialize)]
 struct ResonancePayload {
+    id: i64,
     app_name: String,
     score: f32,
     content: String,
+    matched_content: String,
 }
 
 pub struct Funnel {
@@ -41,9 +43,6 @@ impl Funnel {
 
         if !matches.is_empty() {
             let matched_text = matches[0].0.clone();
-            // Cosine distance in LanceDB is 1 - similarity. 
-            // So score = 1 - (1 - similarity) = similarity.
-            // We clamp it between 0 and 1 for safety.
             let score = (1.0 - matches[0].1).max(0.0).min(1.0);
 
             if score < config.threshold {
@@ -51,17 +50,31 @@ impl Funnel {
             }
 
             info!("Resonance found! Score: {:.2}", score);
-            self.db.add_sample(content.clone(), matched_text, app_name.clone(), matches[0].1).await?;
+            let id = chrono::Utc::now().timestamp_millis();
+            self.db.add_sample(content.clone(), matched_text.clone(), app_name.clone(), matches[0].1).await?;
 
-            // Trigger the Bubble Window
+            // Trigger the Bubble Window with correct positioning
             if let Some(window) = self.app_handle.get_webview_window("resonance-bubble") {
+                // Position at bottom right
+                if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
+                    let size = monitor.size();
+                    let scale_factor = monitor.scale_factor();
+                    
+                    // Logical size of the bubble is 300x120 (from tauri.conf.json)
+                    let x = (size.width as f64 / scale_factor) - 320.0;
+                    let y = (size.height as f64 / scale_factor) - 180.0;
+                    
+                    let _ = window.set_position(Position::Logical(LogicalPosition { x, y }));
+                }
+
                 let _ = window.emit("new-resonance", ResonancePayload {
+                    id,
                     app_name,
                     score,
                     content,
+                    matched_content: matched_text,
                 });
                 let _ = window.show();
-                let _ = window.unminimize();
             }
         }
 

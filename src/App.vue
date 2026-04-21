@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref } from "vue";
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import TriageList from "./components/TriageList.vue";
 import ConfigPanel from "./components/ConfigPanel.vue";
