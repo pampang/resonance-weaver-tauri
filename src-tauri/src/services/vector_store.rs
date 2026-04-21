@@ -1,10 +1,9 @@
 use lancedb::connection::Connection;
 use lancedb::table::Table;
 use lancedb::connect;
-use lancedb::arrow_array::{Float32Array, StringArray, RecordBatch, Int64Array, ArrayRef, FixedSizeListArray};
-use lancedb::arrow_schema::{DataType, Field, Schema};
-use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::distance::DistanceType;
+use arrow_array::{Float32Array, StringArray, RecordBatch, Int64Array, ArrayRef, FixedSizeListArray};
+use arrow_schema::{DataType, Field, Schema};
+use lancedb::query::{ExecutableQuery, QueryBase, DistanceType};
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
