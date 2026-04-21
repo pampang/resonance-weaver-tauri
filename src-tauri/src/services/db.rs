@@ -29,24 +29,27 @@ impl Database {
         ).map_err(|e| e.to_string())?;
 
         // Migration: check if matched_content exists
-        let mut stmt = conn.prepare("PRAGMA table_info(samples)").map_err(|e| e.to_string())?;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        }).map_err(|e| e.to_string())?;
+        // Use a block to ensure stmt and rows are dropped before conn is moved
+        {
+            let mut stmt = conn.prepare("PRAGMA table_info(samples)").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([], |row| {
+                let name: String = row.get(1)?;
+                Ok(name)
+            }).map_err(|e| e.to_string())?;
 
-        let mut has_matched_content = false;
-        for row in rows {
-            if let Ok(name) = row {
-                if name == "matched_content" {
-                    has_matched_content = true;
-                    break;
+            let mut has_matched_content = false;
+            for row in rows {
+                if let Ok(name) = row {
+                    if name == "matched_content" {
+                        has_matched_content = true;
+                        break;
+                    }
                 }
             }
-        }
 
-        if !has_matched_content {
-            let _ = conn.execute("ALTER TABLE samples ADD COLUMN matched_content TEXT", []);
+            if !has_matched_content {
+                let _ = conn.execute("ALTER TABLE samples ADD COLUMN matched_content TEXT", []);
+            }
         }
 
         Ok(Self { conn: Mutex::new(conn) })
