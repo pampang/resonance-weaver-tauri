@@ -1,9 +1,10 @@
 use lancedb::connection::Connection;
 use lancedb::table::Table;
 use lancedb::connect;
-use arrow_array::{Float32Array, StringArray, RecordBatch, Int64Array, ArrayRef, FixedSizeListArray};
-use arrow_schema::{DataType, Field, Schema};
+use lancedb::arrow_array::{Float32Array, StringArray, RecordBatch, Int64Array, ArrayRef, FixedSizeListArray};
+use lancedb::arrow_schema::{DataType, Field, Schema};
 use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::distance::DistanceType;
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
@@ -149,7 +150,10 @@ impl VectorStore {
 
     pub async fn search(&self, vector: Vec<f32>, limit: usize) -> Result<Vec<(String, f32)>, String> {
         let query = self.table.query();
-        let query = query.nearest_to(vector).map_err(|e| e.to_string())?.limit(limit);
+        let query = query
+            .nearest_to(vector).map_err(|e| e.to_string())?
+            .distance_type(DistanceType::Cosine)
+            .limit(limit);
         
         let mut results = query.execute().await.map_err(|e| e.to_string())?;
 

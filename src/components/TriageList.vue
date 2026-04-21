@@ -77,7 +77,7 @@ onMounted(() => {
         <div class="card-top">
           <div class="app-badge">{{ sample.source_app }}</div>
           <div class="resonance-score">
-            <div class="score-label">{{ ((1 - sample.distance) * 100).toFixed(0) }}% Resonance</div>
+            <div class="score-label">{{ Math.max(0, (1 - sample.distance) * 100).toFixed(0) }}% Resonance</div>
             <div class="score-bar-bg">
               <div class="score-bar-fill" :style="{ width: `${Math.max(0, (1 - sample.distance) * 100)}%` }"></div>
             </div>

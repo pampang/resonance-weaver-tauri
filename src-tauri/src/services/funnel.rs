@@ -41,7 +41,10 @@ impl Funnel {
 
         if !matches.is_empty() {
             let matched_text = matches[0].0.clone();
-            let score = 1.0 - matches[0].1;
+            // Cosine distance in LanceDB is 1 - similarity. 
+            // So score = 1 - (1 - similarity) = similarity.
+            // We clamp it between 0 and 1 for safety.
+            let score = (1.0 - matches[0].1).max(0.0).min(1.0);
 
             if score < config.threshold {
                 return Ok(());
