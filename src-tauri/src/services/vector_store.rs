@@ -84,17 +84,37 @@ impl VectorStore {
     }
 
     pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
-        let client = Client::new();
-        let res = client.post("http://localhost:11434/api/embeddings")
+        let client = Client::builder()
+            .no_proxy()
+            .build()
+            .map_err(|e| e.to_string())?;
+            
+        let res = client.post("http://127.0.0.1:11434/api/embeddings")
             .json(&OllamaEmbeddingRequest {
                 model: "nomic-embed-text".to_string(),
                 prompt: text.to_string(),
             })
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                let err_msg = format!("Ollama connection error: {}", e);
+                log::error!("{}", err_msg);
+                err_msg
+            })?;
 
-        let body: OllamaEmbeddingResponse = res.json().await.map_err(|e| e.to_string())?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            let err_msg = format!("Ollama error ({}): {}", status, text);
+            log::error!("{}", err_msg);
+            return Err(err_msg);
+        }
+
+        let body: OllamaEmbeddingResponse = res.json().await.map_err(|e| {
+            let err_msg = format!("Ollama JSON parse error: {}", e);
+            log::error!("{}", err_msg);
+            err_msg
+        })?;
         Ok(body.embedding)
     }
 

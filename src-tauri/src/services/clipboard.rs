@@ -24,7 +24,9 @@ impl ClipboardListener {
                     last_content = content.clone();
                     let funnel = self.funnel.clone();
                     tokio::spawn(async move {
-                        let _ = funnel.process_clipboard(content).await;
+                        if let Err(e) = funnel.process_clipboard(content).await {
+                            log::error!("Error processing clipboard: {}", e);
+                        }
                     });
                 }
             }

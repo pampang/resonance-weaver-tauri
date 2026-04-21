@@ -11,6 +11,7 @@ use crate::services::funnel::Funnel;
 use crate::services::clipboard::ClipboardListener;
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::menu::{Menu, MenuItem};
+use log::{info, error};
 
 struct AppState {
     vector_store: Arc<VectorStore>,
@@ -30,8 +31,11 @@ fn get_config(app: tauri::AppHandle) -> config::AppConfig {
 
 #[tauri::command]
 async fn save_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle, config: config::AppConfig) -> Result<(), String> {
+    info!("Saving configuration...");
     config::save_config(&app, &config)?;
     state._indexer.rebuild_watcher().await?;
+    // Automatically trigger a scan when config changes
+    let _ = state._indexer.trigger_full_index().await;
     Ok(())
 }
 
