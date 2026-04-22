@@ -4,9 +4,10 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use std::sync::Arc;
 use crate::config;
-use log::{info, error, warn};
+use log::{info, error};
 use tokio::sync::Mutex;
 use serde::Serialize;
+use regex::Regex;
 
 #[derive(Clone, Serialize)]
 struct IndexingProgress {
@@ -72,6 +73,10 @@ impl Indexer {
     }
 
     pub async fn trigger_full_index(&self) -> Result<(), String> {
+        // 1. CLEAR THE INDEX FIRST to avoid old metadata noise
+        info!("Purging existing vector index for a clean slate...");
+        self.vector_store.clear_table().await?;
+
         let config = config::load_config(&self.app_handle);
         let mut files_to_index = Vec::new();
         for source in config.kb_sources {
@@ -128,19 +133,18 @@ impl Indexer {
         let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         
-        // --- High-Performance Recursive Splitting Logic ---
         let chunks = Self::split_text_recursively(&content, 1000, 200);
         
         for (i, chunk_content) in chunks.into_iter().enumerate() {
-            if chunk_content.trim().len() < 40 { continue; } // Noise filter
+            if chunk_content.trim().len() < 40 { continue; }
 
-            // Context Injection: Wrap content with filename to help embeddings
+            // Context Injection for better relevance
             let augmented_content = format!("[Source: {}]\n{}", file_name, chunk_content);
             
             match VectorStore::get_embedding(&augmented_content).await {
                 Ok(embedding) => {
                     let id = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) + (i as i64);
-                    let metadata = format!("{}:part:{}", path.to_string_lossy(), i);
+                    let metadata = format!("file:{}|part:{}", file_name, i);
                     let _ = vector_store.add_resonance(id, chunk_content, embedding, Some(metadata)).await;
                 }
                 Err(e) => error!("Embedding failed for {}: {}", file_name, e),
@@ -150,49 +154,34 @@ impl Indexer {
     }
 
     fn split_text_recursively(text: &str, max_size: usize, overlap: usize) -> Vec<String> {
+        // 0. AGGRESSIVE CLEANUP
+        // re_props matches properties even with leading spaces, case-insensitive
+        let re_frontmatter = Regex::new(r"(?s)^---[\r\n].*?---").unwrap();
+        let re_props = Regex::new(r"(?mi)^\s*(type|status|tags|source|created|updated|summary|author|aliases|linter-yaml-title):.*$").unwrap();
+        let re_callout_headers = Regex::new(r"(?m)^>\s*\[!\w+\][+-]?\s*").unwrap(); // Strips "[!abstract]"
+        
+        let cleaned = re_frontmatter.replace(text, "");
+        let cleaned = re_props.replace_all(&cleaned, "");
+        let cleaned = re_callout_headers.replace_all(&cleaned, "> "); // Keep the quote, strip the tag
+        
         let mut final_chunks = Vec::new();
-        
-        // 0. Pre-process: Strip noisy lines like Obsidian properties/frontmatter
-        let cleaned_lines: Vec<&str> = text.lines()
-            .filter(|line| {
-                let l = line.trim();
-                // Skip lines that look like "key: value" (common in Obsidian frontmatter)
-                // but keep those that are inside meaningful text or Callouts
-                if l.contains(':') && (l.starts_with("type:") || l.starts_with("status:") || l.starts_with("tags:") || l.starts_with("source:") || l.starts_with("created:")) {
-                    return false;
-                }
-                if l == "---" { return false; } // Strip YAML separators
-                true
-            })
-            .collect();
-        
-        let cleaned_text = cleaned_lines.join("\n");
-        
-        // 1. Initial split by paragraph
-        let paragraphs: Vec<&str> = cleaned_text.split("\n\n").collect();
+        let paragraphs: Vec<&str> = cleaned.split("\n\n").collect();
         let mut current_chunk = String::new();
 
         for paragraph in paragraphs {
             let p = paragraph.trim();
             if p.is_empty() { continue; }
 
-            // If a single paragraph is larger than max_size, we need to split it further
             if p.chars().count() > max_size {
-                // If we have something in current_chunk, push it first
                 if !current_chunk.is_empty() {
                     final_chunks.push(current_chunk.clone());
                     current_chunk.clear();
                 }
-
-                // Sub-split large paragraph by line or sentence
                 let sub_chunks = Self::split_by_fixed_window(p, max_size, overlap);
                 final_chunks.extend(sub_chunks);
             } else {
-                // Check if adding this paragraph exceeds limit
                 if current_chunk.chars().count() + p.chars().count() > max_size {
                     final_chunks.push(current_chunk.clone());
-                    // Start new chunk with overlap from previous if possible
-                    // (Simplified: just start with current paragraph)
                     current_chunk = p.to_string();
                 } else {
                     if !current_chunk.is_empty() { current_chunk.push_str("\n\n"); }
@@ -200,11 +189,7 @@ impl Indexer {
                 }
             }
         }
-
-        if !current_chunk.is_empty() {
-            final_chunks.push(current_chunk);
-        }
-
+        if !current_chunk.is_empty() { final_chunks.push(current_chunk); }
         final_chunks
     }
 
@@ -212,7 +197,6 @@ impl Indexer {
         let chars: Vec<char> = text.chars().collect();
         let mut chunks = Vec::new();
         let mut start = 0;
-
         while start < chars.len() {
             let end = std::cmp::min(start + size, chars.len());
             let chunk: String = chars[start..end].iter().collect();

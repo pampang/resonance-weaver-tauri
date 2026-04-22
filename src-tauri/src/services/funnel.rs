@@ -43,7 +43,8 @@ impl Funnel {
 
         if !matches.is_empty() {
             let matched_text = matches[0].0.clone();
-            let score = (1.0 - matches[0].1).max(0.0).min(1.0);
+            let distance = matches[0].2;
+            let score = (1.0 - distance).max(0.0).min(1.0);
 
             if score < config.threshold {
                 return Ok(());
@@ -51,7 +52,7 @@ impl Funnel {
 
             info!("Resonance found! Score: {:.2}", score);
             let id = chrono::Utc::now().timestamp_millis();
-            self.db.add_sample(content.clone(), matched_text.clone(), app_name.clone(), matches[0].1).await?;
+            self.db.add_sample(content.clone(), matched_text.clone(), app_name.clone(), distance).await?;
 
             // Trigger the Bubble Window with correct positioning
             if let Some(window) = self.app_handle.get_webview_window("resonance-bubble") {
@@ -60,7 +61,6 @@ impl Funnel {
                     let size = monitor.size();
                     let scale_factor = monitor.scale_factor();
                     
-                    // Logical size of the bubble is 300x120 (from tauri.conf.json)
                     let x = (size.width as f64 / scale_factor) - 320.0;
                     let y = (size.height as f64 / scale_factor) - 180.0;
                     

@@ -84,6 +84,13 @@ impl VectorStore {
             .map_err(|e| e.to_string())
     }
 
+    pub async fn clear_table(&self) -> Result<(), String> {
+        // LanceDB Rust SDK doesn't have a simple "delete all", 
+        // the easiest way is to delete using a filter that matches everything.
+        self.table.delete("id >= 0").await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
         let client = Client::builder()
             .no_proxy()
@@ -148,12 +155,12 @@ impl VectorStore {
         Ok(())
     }
 
-    pub async fn search(&self, vector: Vec<f32>, limit: usize) -> Result<Vec<(String, f32)>, String> {
+    pub async fn search(&self, vector: Vec<f32>, limit: usize) -> Result<Vec<(String, String, f32)>, String> {
         let query = self.table.query();
         let query = query
             .nearest_to(vector).map_err(|e| e.to_string())?
             .distance_type(DistanceType::Cosine)
-            .limit(limit);
+            .limit(limit * 2); // Get more for deduplication
         
         let mut results = query.execute().await.map_err(|e| e.to_string())?;
 
@@ -168,10 +175,18 @@ impl VectorStore {
                 .downcast_ref::<StringArray>()
                 .ok_or("failed to downcast text column")?;
             
+            let metadata_array = batch.column_by_name("metadata")
+                .ok_or("metadata column not found")?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or("failed to downcast metadata column")?;
+
             let distance_array = batch.column_by_name("_distance");
 
             for i in 0..batch.num_rows() {
                 let text = text_array.value(i).to_string();
+                let meta = metadata_array.value(i).to_string();
+                
                 if text == "dummy" || seen_texts.contains(&text) {
                     continue;
                 }
@@ -185,7 +200,8 @@ impl VectorStore {
                 };
                 
                 seen_texts.insert(text.clone());
-                matches.push((text, distance));
+                matches.push((text, meta, distance));
+                if matches.len() >= limit { break; }
             }
         }
 

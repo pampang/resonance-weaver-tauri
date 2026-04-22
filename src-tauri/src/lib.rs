@@ -40,7 +40,7 @@ async fn reindex(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn search_resonance(state: tauri::State<'_, AppState>, text: String) -> Result<Vec<(String, f32)>, String> {
+async fn search_resonance(state: tauri::State<'_, AppState>, text: String) -> Result<Vec<(String, String, f32)>, String> {
     let embedding = VectorStore::get_embedding(&text).await?;
     state.vector_store.search(embedding, 3).await
 }

@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import IconButton from './IconButton.vue';
 
 const appWebviewWindow = getCurrentWebviewWindow();
 
@@ -60,7 +61,6 @@ onMounted(async () => {
 </script>
 
 <template>
-  <!-- Even if payload is null, the root div should be transparent -->
   <div class="bubble-window-root">
     <div v-if="payload" class="bubble-container" @click="openHub">
       <div class="bubble-inner">
@@ -91,7 +91,9 @@ onMounted(async () => {
           <div class="timer-fill" :style="{ width: `${timerProgress}%` }"></div>
         </div>
       </div>
-      <button class="close-btn" @click.stop="closeBubble">✕</button>
+      <div class="abs-close">
+        <IconButton size="sm" @click="closeBubble" />
+      </div>
     </div>
   </div>
 </template>
@@ -244,17 +246,10 @@ onMounted(async () => {
   background: #646cff;
 }
 
-.close-btn {
+.abs-close {
   position: absolute;
   top: 14px;
   right: 14px;
-  background: transparent;
-  border: none;
-  color: rgba(255, 255, 255, 0.3);
-  cursor: pointer;
-  z-index: 10;
-  font-size: 0.9rem;
+  z-index: 100;
 }
-
-.close-btn:hover { color: #fff; }
 </style>

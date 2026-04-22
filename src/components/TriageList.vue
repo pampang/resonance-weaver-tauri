@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { marked } from 'marked';
+import IconButton from './IconButton.vue';
 
 interface Sample {
   id: number;
@@ -10,6 +11,7 @@ interface Sample {
   source_app: string;
   distance: number;
   created_at: string;
+  metadata?: string; // Add metadata field
 }
 
 const samples = ref<Sample[]>([]);
@@ -71,7 +73,7 @@ const showToast = (msg: string) => {
 const formatDate = (dateStr: string) => {
   try {
     const date = new Date(dateStr + 'Z');
-    return date.toLocaleString();
+    return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   } catch {
     return dateStr;
   }
@@ -80,13 +82,17 @@ const formatDate = (dateStr: string) => {
 const renderMarkdown = (text: string | null): string => {
   if (!text) return '';
   try {
-    // marked.parse can be synchronous or asynchronous depending on configuration.
-    // In current version it is sync by default.
     return marked.parse(text) as string;
   } catch (e) {
-    console.error('Markdown parse error:', e);
-    return text; // Fallback to raw text
+    return text;
   }
+};
+
+const getSourceFile = (metadata?: string) => {
+  if (!metadata) return null;
+  // Format is "file:Filename.md|part:X"
+  const match = metadata.match(/file:(.*?)\|/);
+  return match ? match[1] : null;
 };
 
 onMounted(() => {
@@ -136,13 +142,40 @@ onMounted(() => {
             {{ Math.max(0, (1 - sample.distance) * 100).toFixed(0) }}% Resonance
           </div>
 
-          <button class="delete-icon" @click="deleteSample(sample.id)" title="Delete">✕</button>
+          <IconButton 
+            variant="danger" 
+            size="md" 
+            title="Delete Resonance" 
+            @click="deleteSample(sample.id)" 
+          />
         </div>
         
-        <div class="card-preview-area" @click="selectedSample = sample">
-          <div class="preview-box captured" v-html="renderMarkdown(sample.content.substring(0, 200) + '...')"></div>
-          <div class="preview-box matched" v-if="sample.matched_content" v-html="renderMarkdown(sample.matched_content.substring(0, 200) + '...')"></div>
-          <div class="expand-hint">Click to read full association ↘</div>
+        <div class="card-content-area" @click="selectedSample = sample">
+          <div class="content-block captured">
+            <label>Captured</label>
+            <div class="preview-wrap">
+              <div class="markdown-content" v-html="renderMarkdown(sample.content)"></div>
+              <div class="fade-overlay"></div>
+            </div>
+          </div>
+
+          <div class="connector-v">
+            <div class="dot"></div>
+          </div>
+
+          <div class="content-block matched" v-if="sample.matched_content">
+            <div class="matched-header">
+              <label>Knowledge Match</label>
+              <span v-if="getSourceFile(sample.metadata)" class="source-tag">
+                📄 {{ getSourceFile(sample.metadata) }}
+              </span>
+            </div>
+            <div class="preview-wrap">
+              <div class="markdown-content" v-html="renderMarkdown(sample.matched_content)"></div>
+              <div class="fade-overlay"></div>
+            </div>
+          </div>
+          <div class="expand-hint">Click card to open full immersive view</div>
         </div>
 
         <div class="card-footer">
@@ -157,8 +190,13 @@ onMounted(() => {
       <div v-if="selectedSample" class="modal-overlay" @click.self="selectedSample = null">
         <div class="modal-container">
           <div class="modal-header">
-            <h3>Resonance Analysis</h3>
-            <button class="modal-close-btn" @click="selectedSample = null">✕</button>
+            <div class="modal-title">
+              <h3>Resonance Analysis</h3>
+              <span class="modal-source" v-if="getSourceFile(selectedSample.metadata)">
+                Source: {{ getSourceFile(selectedSample.metadata) }}
+              </span>
+            </div>
+            <IconButton size="lg" @click="selectedSample = null" />
           </div>
           <div class="modal-body">
             <div class="modal-pane">
@@ -168,7 +206,7 @@ onMounted(() => {
             
             <div class="modal-divider">
               <div class="line"></div>
-              <div class="score-node">{{ ((1-selectedSample.distance)*100).toFixed(0) }}%</div>
+              <div class="score-node">{{ ((1-selectedSample.distance)*100).toFixed(0) }}% Similarity</div>
               <div class="line"></div>
             </div>
 
@@ -222,93 +260,136 @@ h2 { margin: 0; font-size: 1.8rem; font-weight: 800; color: #fff; }
 }
 
 .samples-list {
-  display: flex; flex-direction: column; gap: 32px;
+  display: flex; flex-direction: column; gap: 40px;
   max-width: 800px; margin: 0 auto;
 }
 
 .sample-card {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px; padding: 24px;
+  border-radius: 24px; padding: 28px;
+  transition: all 0.3s;
 }
 
-.sample-card:hover { border-color: rgba(100, 108, 255, 0.3); }
+.sample-card:hover { 
+  border-color: rgba(100, 108, 255, 0.4);
+  background: rgba(255, 255, 255, 0.03);
+}
 
-.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.app-dot { width: 8px; height: 8px; background: #646cff; border-radius: 50%; box-shadow: 0 0 10px #646cff; }
-.app-name { font-weight: 700; font-size: 0.9rem; margin-left: 8px; }
+.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.app-dot { width: 10px; height: 10px; background: #646cff; border-radius: 50%; box-shadow: 0 0 10px #646cff; }
+.app-name { font-weight: 700; font-size: 1rem; margin-left: 10px; color: #eee; }
 
 .resonance-score {
-  font-family: 'JetBrains Mono', monospace; font-weight: 800; color: #b794ff; font-size: 0.85rem;
+  font-family: 'JetBrains Mono', monospace; font-weight: 800; color: #b794ff; font-size: 0.9rem;
+  background: rgba(183, 148, 255, 0.1); padding: 4px 12px; border-radius: 20px;
 }
 
-.delete-icon {
-  background: rgba(255, 255, 255, 0.05); border: none; color: #555;
-  width: 32px; height: 32px; border-radius: 50%; cursor: pointer;
-}
-.delete-icon:hover { background: rgba(255, 77, 77, 0.2); color: #ff4d4d; }
+.card-content-area { cursor: pointer; display: flex; flex-direction: column; }
 
-.card-preview-area { cursor: pointer; display: flex; flex-direction: column; gap: 10px; }
-.preview-box {
-  padding: 12px; border-radius: 10px; background: rgba(255, 255, 255, 0.02);
-  font-size: 0.9rem; color: #aaa; max-height: 100px; overflow: hidden;
+.content-block {
+  display: flex; flex-direction: column; gap: 8px;
 }
-.preview-box.matched { border-left: 3px solid #4CAF5022; }
 
-.expand-hint { font-size: 0.7rem; color: #444; text-align: right; }
+.content-block label {
+  font-size: 0.65rem; font-weight: 900; text-transform: uppercase; color: #444; letter-spacing: 1px;
+}
+
+.matched-header {
+  display: flex; justify-content: space-between; align-items: center;
+}
+
+.source-tag {
+  font-size: 0.7rem; color: #646cff; background: rgba(100, 108, 255, 0.1);
+  padding: 2px 8px; border-radius: 4px; font-weight: 600;
+}
+
+.preview-wrap {
+  position: relative; max-height: 140px; overflow: hidden;
+  border-radius: 12px; background: rgba(255, 255, 255, 0.015);
+  padding: 12px;
+}
+
+.fade-overlay {
+  position: absolute; bottom: 0; left: 0; width: 100%; height: 40px;
+  background: linear-gradient(to top, #141414, transparent);
+}
+
+.markdown-content { font-size: 0.95rem; color: #bbb; line-height: 1.5; }
+
+.connector-v {
+  height: 30px; display: flex; align-items: center; justify-content: center;
+}
+.connector-v .dot {
+  width: 4px; height: 4px; background: #333; border-radius: 50%;
+}
+
+.expand-hint { font-size: 0.7rem; color: #333; text-align: center; margin-top: 12px; font-style: italic; }
 
 .card-footer {
-  margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.05);
+  margin-top: 24px; padding-top: 20px; border-top: 1px solid rgba(255, 255, 255, 0.05);
   display: flex; justify-content: space-between; align-items: center;
 }
 .time { font-size: 0.75rem; color: #444; }
 
 .synthesis-btn {
   background: #646cff; color: white; border: none;
-  padding: 8px 20px; border-radius: 8px; font-weight: 700; cursor: pointer;
+  padding: 10px 24px; border-radius: 10px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 4px 15px rgba(100, 108, 255, 0.2);
 }
 
 /* Modal */
 .modal-overlay {
   position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-  background: rgba(0, 0, 0, 0.9); backdrop-filter: blur(12px);
+  background: rgba(0, 0, 0, 0.9); backdrop-filter: blur(16px);
   display: flex; justify-content: center; align-items: center; z-index: 2000;
   padding: 40px;
 }
 
 .modal-container {
-  background: #16161a; width: 100%; max-width: 1000px; height: 90vh;
-  border-radius: 24px; border: 1px solid #333; display: flex; flex-direction: column;
-  overflow: hidden;
+  background: #0f0f12; width: 100%; max-width: 1000px; height: 90vh;
+  border-radius: 28px; border: 1px solid #222; display: flex; flex-direction: column;
+  overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,0.8);
 }
 
 .modal-header {
-  padding: 24px 32px; border-bottom: 1px solid #333;
+  padding: 28px 40px; border-bottom: 1px solid #222;
   display: flex; justify-content: space-between; align-items: center;
 }
-.modal-close-btn {
-  background: #333; border: none; color: #fff; width: 40px; height: 40px; border-radius: 50%; cursor: pointer;
-}
 
-.modal-body { flex-grow: 1; overflow-y: auto; padding: 32px; display: flex; flex-direction: column; gap: 32px; }
-.modal-pane label { color: #646cff; font-weight: 800; font-size: 0.7rem; text-transform: uppercase; display: block; margin-bottom: 16px; }
+.modal-title h3 { margin: 0; font-size: 1.5rem; color: #fff; }
+.modal-source { font-size: 0.8rem; color: #646cff; margin-top: 4px; display: block; font-weight: 600; }
 
-.markdown-view { color: #ccc; line-height: 1.6; }
+.modal-body { flex-grow: 1; overflow-y: auto; padding: 40px; display: flex; flex-direction: column; gap: 40px; }
+.modal-pane label { color: #646cff; font-weight: 800; font-size: 0.75rem; text-transform: uppercase; display: block; margin-bottom: 20px; letter-spacing: 1px; }
 
-.modal-divider { display: flex; align-items: center; gap: 16px; }
+.markdown-view { color: #ccc; line-height: 1.7; font-size: 1.05rem; }
+
+/* Base Markdown Styles */
+:deep(.markdown-view h1), :deep(.markdown-view h2) { color: #fff; margin-top: 1.2em; font-size: 1.2rem; border-bottom: 1px solid #333; padding-bottom: 8px; }
+:deep(.markdown-view code) { background: rgba(100, 108, 255, 0.2); color: #b794ff; padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; }
+:deep(.markdown-view pre) { background: #000; padding: 20px; border-radius: 12px; overflow-x: auto; border: 1px solid #222; margin: 16px 0; }
+:deep(.markdown-view blockquote) { border-left: 4px solid #646cff; padding-left: 20px; color: #999; background: rgba(255,255,255,0.02); padding: 12px 20px; border-radius: 0 8px 8px 0; }
+
+.modal-divider { display: flex; align-items: center; gap: 20px; }
 .modal-divider .line { flex-grow: 1; height: 1px; background: #222; }
-.score-node { color: #646cff; font-weight: 800; font-size: 0.9rem; }
-
-.modal-footer { padding: 32px; border-top: 1px solid #333; text-align: center; }
-.synthesis-btn-large {
-  background: #646cff; color: white; border: none; padding: 16px 64px;
-  border-radius: 16px; font-weight: 800; font-size: 1.1rem; cursor: pointer;
+.score-node { 
+  background: #1a1a2a; border: 1px solid #646cff; color: #646cff;
+  padding: 6px 18px; border-radius: 30px; font-weight: 800; font-size: 1rem; 
 }
+
+.modal-footer { padding: 32px 40px; border-top: 1px solid #222; text-align: center; background: rgba(0,0,0,0.2); }
+.synthesis-btn-large {
+  background: #646cff; color: white; border: none; padding: 18px 80px;
+  border-radius: 20px; font-weight: 800; font-size: 1.2rem; cursor: pointer;
+  transition: all 0.3s;
+}
+.synthesis-btn-large:hover { transform: scale(1.02); box-shadow: 0 8px 25px rgba(100, 108, 255, 0.4); }
 
 /* Transitions */
-.modal-enter-active, .modal-leave-active { transition: all 0.3s ease; }
-.modal-enter-from, .modal-leave-to { opacity: 0; transform: scale(0.98); }
+.modal-enter-active, .modal-leave-active { transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.modal-enter-from, .modal-leave-to { opacity: 0; transform: translateY(40px) scale(0.95); }
 
 .state-container { text-align: center; margin-top: 120px; color: #444; }
-.empty-icon { font-size: 4rem; opacity: 0.2; }
+.empty-icon { font-size: 4rem; opacity: 0.1; }
 </style>

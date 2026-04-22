@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import IconButton from './IconButton.vue';
 
 interface Config {
   kb_sources: string[];
@@ -131,7 +132,12 @@ onUnmounted(() => {
       <h3>Knowledge Sources</h3>
       <div v-for="(source, index) in config.kb_sources" :key="index" class="input-group">
         <input :value="source" readonly />
-        <button class="remove-source-btn" @click="removeSource(index)" title="Remove Source">✕</button>
+        <IconButton 
+          variant="danger" 
+          size="md" 
+          title="Remove Source" 
+          @click="removeSource(index)" 
+        />
       </div>
       <button class="add-btn" @click="pickFolder">+ Add Folder Source</button>
     </div>
@@ -248,28 +254,6 @@ input[readonly] {
   color: #ccc;
   border-radius: 8px;
   font-size: 0.9rem;
-}
-
-.remove-source-btn {
-  background: rgba(255, 255, 255, 0.05);
-  border: none;
-  color: #666;
-  cursor: pointer;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.2rem;
-  transition: all 0.2s;
-  flex-shrink: 0;
-}
-
-.remove-source-btn:hover {
-  background: rgba(255, 77, 77, 0.2);
-  color: #ff4d4d;
-  transform: rotate(90deg);
 }
 
 .add-btn {
