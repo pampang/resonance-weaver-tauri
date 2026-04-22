@@ -158,6 +158,8 @@ impl VectorStore {
         let mut results = query.execute().await.map_err(|e| e.to_string())?;
 
         let mut matches = Vec::new();
+        let mut seen_texts = std::collections::HashSet::new();
+
         while let Some(batch) = results.next().await {
             let batch = batch.map_err(|e| e.to_string())?;
             let text_array = batch.column_by_name("text")
@@ -170,6 +172,10 @@ impl VectorStore {
 
             for i in 0..batch.num_rows() {
                 let text = text_array.value(i).to_string();
+                if text == "dummy" || seen_texts.contains(&text) {
+                    continue;
+                }
+
                 let distance = if let Some(dist_col) = distance_array {
                     dist_col.as_any().downcast_ref::<Float32Array>()
                         .map(|a| a.value(i))
@@ -177,9 +183,9 @@ impl VectorStore {
                 } else {
                     0.0
                 };
-                if text != "dummy" {
-                    matches.push((text, distance));
-                }
+                
+                seen_texts.insert(text.clone());
+                matches.push((text, distance));
             }
         }
 

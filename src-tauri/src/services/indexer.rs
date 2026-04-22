@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use std::sync::Arc;
 use crate::config;
-use log::{info, error};
+use log::{info, error, warn};
 use tokio::sync::Mutex;
 use serde::Serialize;
 
@@ -39,7 +39,6 @@ impl Indexer {
     pub async fn rebuild_watcher(&self) -> Result<(), String> {
         let config = config::load_config(&self.app_handle);
         let vector_store = self.vector_store.clone();
-        
         let (tx, mut rx) = tokio::sync::mpsc::channel(100);
 
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
@@ -74,8 +73,6 @@ impl Indexer {
 
     pub async fn trigger_full_index(&self) -> Result<(), String> {
         let config = config::load_config(&self.app_handle);
-        
-        // 1. Collect all files first to calculate total
         let mut files_to_index = Vec::new();
         for source in config.kb_sources {
             let path = PathBuf::from(source);
@@ -85,21 +82,15 @@ impl Indexer {
         }
 
         let total = files_to_index.len();
-        info!("Starting full indexing of {} files...", total);
-
-        // 2. Index with progress reporting
         for (i, path) in files_to_index.into_iter().enumerate() {
             let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            let percentage = (i as f32 / total as f32) * 100.0;
-            
             let _ = self.app_handle.emit("indexing-progress", IndexingProgress {
                 total_files: total,
                 current_file: i + 1,
                 file_name,
-                percentage,
+                percentage: (i as f32 / total as f32) * 100.0,
                 is_complete: false,
             });
-
             let _ = Self::index_file(&self.vector_store, path).await;
         }
 
@@ -110,8 +101,6 @@ impl Indexer {
             percentage: 100.0,
             is_complete: true,
         });
-
-        info!("Full indexing complete.");
         Ok(())
     }
 
@@ -131,43 +120,106 @@ impl Indexer {
     }
 
     fn is_allowed_file(&self, path: &PathBuf) -> bool {
-        if path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
-            return false;
-        }
-        let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-        let allowed = ["txt", "md", "markdown", "rs", "ts", "js", "py", "c", "cpp", "h"];
-        allowed.contains(&extension.as_str())
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
+        ["txt", "md", "markdown", "rs", "ts", "py", "js"].contains(&ext.as_str())
     }
 
     async fn index_file(vector_store: &VectorStore, path: PathBuf) -> Result<(), String> {
         let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         
-        // --- Smart Chunking ---
-        // Split content into chunks of ~1000 characters with 200 overlap
-        let chunk_size = 1000;
-        let overlap = 200;
-        let mut start = 0;
-        let chars: Vec<char> = content.chars().collect();
+        // --- High-Performance Recursive Splitting Logic ---
+        let chunks = Self::split_text_recursively(&content, 1000, 200);
         
-        while start < chars.len() {
-            let end = std::cmp::min(start + chunk_size, chars.len());
-            let chunk: String = chars[start..end].iter().collect();
+        for (i, chunk_content) in chunks.into_iter().enumerate() {
+            if chunk_content.trim().len() < 40 { continue; } // Noise filter
+
+            // Context Injection: Wrap content with filename to help embeddings
+            let augmented_content = format!("[Source: {}]\n{}", file_name, chunk_content);
             
-            if !chunk.trim().is_empty() {
-                match VectorStore::get_embedding(&chunk).await {
-                    Ok(embedding) => {
-                        let id = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-                        let metadata = format!("{}:{}", path.to_string_lossy(), start);
-                        let _ = vector_store.add_resonance(id, chunk, embedding, Some(metadata)).await;
-                    }
-                    Err(e) => error!("Embedding error: {}", e),
+            match VectorStore::get_embedding(&augmented_content).await {
+                Ok(embedding) => {
+                    let id = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) + (i as i64);
+                    let metadata = format!("{}:part:{}", path.to_string_lossy(), i);
+                    let _ = vector_store.add_resonance(id, chunk_content, embedding, Some(metadata)).await;
+                }
+                Err(e) => error!("Embedding failed for {}: {}", file_name, e),
+            }
+        }
+        Ok(())
+    }
+
+    fn split_text_recursively(text: &str, max_size: usize, overlap: usize) -> Vec<String> {
+        let mut final_chunks = Vec::new();
+        
+        // 0. Pre-process: Strip noisy lines like Obsidian properties/frontmatter
+        let cleaned_lines: Vec<&str> = text.lines()
+            .filter(|line| {
+                let l = line.trim();
+                // Skip lines that look like "key: value" (common in Obsidian frontmatter)
+                // but keep those that are inside meaningful text or Callouts
+                if l.contains(':') && (l.starts_with("type:") || l.starts_with("status:") || l.starts_with("tags:") || l.starts_with("source:") || l.starts_with("created:")) {
+                    return false;
+                }
+                if l == "---" { return false; } // Strip YAML separators
+                true
+            })
+            .collect();
+        
+        let cleaned_text = cleaned_lines.join("\n");
+        
+        // 1. Initial split by paragraph
+        let paragraphs: Vec<&str> = cleaned_text.split("\n\n").collect();
+        let mut current_chunk = String::new();
+
+        for paragraph in paragraphs {
+            let p = paragraph.trim();
+            if p.is_empty() { continue; }
+
+            // If a single paragraph is larger than max_size, we need to split it further
+            if p.chars().count() > max_size {
+                // If we have something in current_chunk, push it first
+                if !current_chunk.is_empty() {
+                    final_chunks.push(current_chunk.clone());
+                    current_chunk.clear();
+                }
+
+                // Sub-split large paragraph by line or sentence
+                let sub_chunks = Self::split_by_fixed_window(p, max_size, overlap);
+                final_chunks.extend(sub_chunks);
+            } else {
+                // Check if adding this paragraph exceeds limit
+                if current_chunk.chars().count() + p.chars().count() > max_size {
+                    final_chunks.push(current_chunk.clone());
+                    // Start new chunk with overlap from previous if possible
+                    // (Simplified: just start with current paragraph)
+                    current_chunk = p.to_string();
+                } else {
+                    if !current_chunk.is_empty() { current_chunk.push_str("\n\n"); }
+                    current_chunk.push_str(p);
                 }
             }
-
-            start += chunk_size - overlap;
-            if start >= chars.len() { break; }
         }
-        
-        Ok(())
+
+        if !current_chunk.is_empty() {
+            final_chunks.push(current_chunk);
+        }
+
+        final_chunks
+    }
+
+    fn split_by_fixed_window(text: &str, size: usize, overlap: usize) -> Vec<String> {
+        let chars: Vec<char> = text.chars().collect();
+        let mut chunks = Vec::new();
+        let mut start = 0;
+
+        while start < chars.len() {
+            let end = std::cmp::min(start + size, chars.len());
+            let chunk: String = chars[start..end].iter().collect();
+            chunks.push(chunk);
+            if end == chars.len() { break; }
+            start += size - overlap;
+        }
+        chunks
     }
 }

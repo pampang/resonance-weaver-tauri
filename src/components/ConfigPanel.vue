@@ -43,6 +43,7 @@ const saveConfig = async () => {
   config.value.app_whitelist = app_whitelist_str.value.split(',').map(s => s.trim()).filter(s => s !== '');
   try {
     await invoke('save_config', { config: config.value });
+    alert('Configuration saved.');
   } finally {
     is_saving.value = false;
   }
@@ -69,8 +70,6 @@ const triggerReindex = async () => {
     await invoke('reindex');
   } catch (e) {
     alert('Error: ' + e);
-  } finally {
-    // We don't set is_reindexing false here, we wait for progress.is_complete
   }
 };
 
@@ -132,7 +131,7 @@ onUnmounted(() => {
       <h3>Knowledge Sources</h3>
       <div v-for="(source, index) in config.kb_sources" :key="index" class="input-group">
         <input :value="source" readonly />
-        <button class="remove-btn" @click="removeSource(index)">✕</button>
+        <button class="remove-source-btn" @click="removeSource(index)" title="Remove Source">✕</button>
       </div>
       <button class="add-btn" @click="pickFolder">+ Add Folder Source</button>
     </div>
@@ -237,55 +236,66 @@ h3 {
 .input-group {
   display: flex;
   margin-bottom: 8px;
-  gap: 8px;
+  gap: 12px;
+  align-items: center;
 }
 
 input[readonly] {
   flex-grow: 1;
-  padding: 10px;
+  padding: 12px;
   background: #2a2a2a;
   border: 1px solid #444;
   color: #ccc;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 0.9rem;
 }
 
-.remove-btn {
-  background: #333;
-  color: #ff4d4d;
+.remove-source-btn {
+  background: rgba(255, 255, 255, 0.05);
   border: none;
-  width: 38px;
-  border-radius: 6px;
+  color: #666;
   cursor: pointer;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  transition: all 0.2s;
+  flex-shrink: 0;
 }
 
-.remove-btn:hover {
-  background: #444;
+.remove-source-btn:hover {
+  background: rgba(255, 77, 77, 0.2);
+  color: #ff4d4d;
+  transform: rotate(90deg);
 }
 
 .add-btn {
   width: 100%;
-  padding: 10px;
+  padding: 12px;
   background: #2a2a2a;
   color: #646cff;
   border: 1px dashed #646cff;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   margin-top: 8px;
-  font-weight: 500;
+  font-weight: 600;
+  transition: all 0.2s;
 }
 
 .add-btn:hover {
-  background: #303040;
+  background: rgba(100, 108, 255, 0.1);
 }
 
 textarea {
   width: 100%;
-  height: 80px;
+  height: 100px;
   background: #2a2a2a;
   border: 1px solid #444;
   color: white;
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 12px;
   font-family: inherit;
   resize: vertical;
@@ -305,8 +315,8 @@ textarea {
 .app-chip {
   background: #333;
   color: #aaa;
-  padding: 4px 12px;
-  border-radius: 16px;
+  padding: 6px 14px;
+  border-radius: 20px;
   font-size: 0.8rem;
   cursor: pointer;
   transition: all 0.2s;
@@ -329,19 +339,21 @@ input[type="range"] {
 
 .save-btn {
   width: 100%;
-  padding: 14px;
+  padding: 16px;
   background: #646cff;
   color: white;
   border: none;
-  border-radius: 8px;
-  font-weight: bold;
+  border-radius: 12px;
+  font-weight: 800;
   font-size: 1rem;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(100, 108, 255, 0.2);
+  box-shadow: 0 4px 15px rgba(100, 108, 255, 0.3);
+  transition: all 0.2s;
 }
 
 .save-btn:hover:not(:disabled) {
   background: #535bf2;
+  transform: translateY(-1px);
 }
 
 .save-btn:disabled {
@@ -353,13 +365,14 @@ input[type="range"] {
   background: transparent;
   color: #646cff;
   border: 1px solid #646cff;
-  padding: 6px 12px;
-  border-radius: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
   font-size: 0.85rem;
+  font-weight: 600;
   cursor: pointer;
 }
 
 .reindex-btn:hover {
-  background: #646cff1a;
+  background: rgba(100, 108, 255, 0.1);
 }
 </style>
