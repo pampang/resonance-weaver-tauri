@@ -2,10 +2,11 @@ use std::process::Command;
 use crate::services::vector_store::VectorStore;
 use crate::services::db::Database;
 use crate::config;
-use tauri::{AppHandle, Manager, Emitter, LogicalPosition, Position};
+use tauri::{AppHandle, Manager, Emitter};
 use std::sync::Arc;
 use log::{info};
 use serde::Serialize;
+use tauri_plugin_notification::NotificationExt;
 
 #[derive(Clone, Serialize)]
 struct ResonancePayload {
@@ -50,38 +51,34 @@ impl Funnel {
                 return Ok(());
             }
 
-            info!("Resonance found! Broadcasting to all windows...");
+            info!("Resonance found! Saving to database...");
             let id = chrono::Utc::now().timestamp_millis();
             self.db.add_sample(content.clone(), matched_text.clone(), app_name.clone(), distance).await?;
 
             let payload = ResonancePayload {
                 id,
-                app_name,
+                app_name: app_name.clone(),
                 score,
-                content,
+                content: content.clone(),
                 matched_content: matched_text,
             };
 
-            if let Some(w) = self.app_handle.get_webview_window("resonance-bubble") {
-                if let Some(monitor) = w.current_monitor().map_err(|e| e.to_string())? {
-                    let size = monitor.size();
-                    let scale_factor = monitor.scale_factor();
-                    let x = (size.width as f64 / scale_factor) - 340.0;
-                    let y = (size.height as f64 / scale_factor) - 180.0;
-                    let _ = w.set_position(Position::Logical(LogicalPosition { x, y }));
-                }
+            // 1. Emit to main window for live UI updates
+            let _ = self.app_handle.emit_to("main", "new-resonance", &payload);
 
-                // 1. Wake up the window first
-                let _ = w.show();
-                let _ = w.unminimize();
-                
-                // 2. Emit the event after a tiny delay
-                let w_clone = w.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    let _ = w_clone.emit("new-resonance", &payload);
-                });
-            }
+            // 2. Native OS Notification (Elegant and non-intrusive)
+            let snippet = if content.chars().count() > 40 {
+                let s: String = content.chars().take(40).collect();
+                format!("{}...", s)
+            } else {
+                content
+            };
+            
+            let _ = self.app_handle.notification()
+                .builder()
+                .title(format!("Resonance with {}", app_name))
+                .body(format!("{}% Match: {}", (score * 100.0) as i32, snippet))
+                .show();
         }
 
         Ok(())

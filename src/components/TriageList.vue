@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { marked } from 'marked';
 import IconButton from './IconButton.vue';
 
@@ -11,7 +12,7 @@ interface Sample {
   source_app: string;
   distance: number;
   created_at: string;
-  metadata?: string; // Add metadata field
+  metadata?: string;
 }
 
 const samples = ref<Sample[]>([]);
@@ -41,11 +42,13 @@ const fetchSamples = async () => {
 };
 
 const deleteSample = async (id: number) => {
-  if (confirm('Delete this resonance?')) {
+  if (confirm('Delete this resonance from history?')) {
     try {
       await invoke('delete_sample', { id });
       samples.value = samples.value.filter(s => s.id !== id);
-      if (selectedSample.value?.id === id) selectedSample.value = null;
+      if (selectedSample.value?.id === id) {
+        selectedSample.value = null;
+      }
     } catch (e) {
       console.error(e);
     }
@@ -73,10 +76,23 @@ const showToast = (msg: string) => {
 const formatDate = (dateStr: string) => {
   try {
     const date = new Date(dateStr + 'Z');
-    return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const now = new Date();
+    if (date.toDateString() === now.toDateString()) {
+      return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   } catch {
     return dateStr;
   }
+};
+
+const getScore = (distance: number) => Math.max(0, (1 - distance) * 100).toFixed(0);
+
+const getResonanceClass = (distance: number) => {
+  const score = 1 - distance;
+  if (score > 0.9) return 'high';
+  if (score > 0.75) return 'mid';
+  return 'low';
 };
 
 const renderMarkdown = (text: string | null): string => {
@@ -90,320 +106,290 @@ const renderMarkdown = (text: string | null): string => {
 
 const getSourceFile = (metadata?: string) => {
   if (!metadata) return null;
-  // Format is "file:Filename.md|part:X"
   const match = metadata.match(/file:(.*?)\|/);
   return match ? match[1] : null;
 };
 
-onMounted(() => {
+onMounted(async () => {
   fetchSamples();
-  setInterval(fetchSamples, 5000);
+  
+  // Real-time update when Funnel emits an event
+  await listen('new-resonance', () => {
+    fetchSamples(); // Fetch to get the new item with ID
+  });
+
+  // Background polling as fallback
+  setInterval(fetchSamples, 10000);
 });
 </script>
 
 <template>
-  <div class="triage-hub-root">
-    <div class="header">
-      <div class="title-group">
-        <h2>Triage Hub</h2>
-        <span class="count-badge">{{ samples.length }} Resonances</span>
-      </div>
-      <div class="header-btns">
-        <button class="debug-btn" @click="invoke('ping_test')">Ping Test Event</button>
-        <button class="refresh-btn" @click="fetchSamples">
-          <span class="icon">🔄</span> Refresh
-        </button>
-      </div>
-    </div>
-
+  <div class="split-view-root">
     <!-- Toast -->
     <Transition name="fade">
       <div v-if="toastMsg" class="toast">{{ toastMsg }}</div>
     </Transition>
 
-    <!-- State Messages -->
-    <div v-if="is_loading && samples.length === 0" class="state-container">
-      <div class="loader"></div>
-      <p>Syncing Knowledge Base...</p>
-    </div>
-    
-    <div v-else-if="samples.length === 0" class="state-container">
-      <div class="empty-icon">📡</div>
-      <p>Silence in the library.</p>
-    </div>
-
-    <!-- Main List -->
-    <div v-else class="samples-list">
-      <div v-for="sample in samples" :key="sample.id" class="sample-card">
-        <div class="card-header">
-          <div class="app-info">
-            <span class="app-dot"></span>
-            <span class="app-name">{{ sample.source_app }}</span>
-          </div>
-          
-          <div class="resonance-score">
-            {{ Math.max(0, (1 - sample.distance) * 100).toFixed(0) }}% Resonance
-          </div>
-
-          <IconButton 
-            variant="danger" 
-            size="md" 
-            title="Delete Resonance" 
-            @click="deleteSample(sample.id)" 
-          />
+    <!-- LEFT PANE: Master List -->
+    <div class="master-pane">
+      <div class="pane-header">
+        <div class="title-area">
+          <h2>Triage Hub</h2>
+          <span class="count">{{ samples.length }} captures</span>
         </div>
-        
-        <div class="card-content-area" @click="selectedSample = sample">
-          <div class="content-block captured">
-            <label>Captured</label>
-            <div class="preview-wrap">
-              <div class="markdown-content" v-html="renderMarkdown(sample.content)"></div>
-              <div class="fade-overlay"></div>
-            </div>
-          </div>
-
-          <div class="connector-v">
-            <div class="dot"></div>
-          </div>
-
-          <div class="content-block matched" v-if="sample.matched_content">
-            <div class="matched-header">
-              <label>Knowledge Match</label>
-              <span v-if="getSourceFile(sample.metadata)" class="source-tag">
-                📄 {{ getSourceFile(sample.metadata) }}
-              </span>
-            </div>
-            <div class="preview-wrap">
-              <div class="markdown-content" v-html="renderMarkdown(sample.matched_content)"></div>
-              <div class="fade-overlay"></div>
-            </div>
-          </div>
-          <div class="expand-hint">Click card to open full immersive view</div>
+        <div class="actions">
+          <button class="icon-btn" @click="invoke('ping_test')" title="Send Test Ping">⚡</button>
+          <button class="icon-btn" @click="fetchSamples" title="Refresh">🔄</button>
         </div>
+      </div>
 
-        <div class="card-footer">
-          <span class="time">{{ formatDate(sample.created_at) }}</span>
-          <button class="synthesis-btn" @click="openDeepBridge(sample)">Synthesize</button>
+      <div v-if="is_loading && samples.length === 0" class="list-state">
+        <div class="loader"></div>
+        <p>Loading...</p>
+      </div>
+      <div v-else-if="samples.length === 0" class="list-state">
+        <p>No resonances recorded.</p>
+        <span class="hint">Copy text to trigger.</span>
+      </div>
+
+      <div v-else class="list-content">
+        <div 
+          v-for="sample in samples" 
+          :key="sample.id" 
+          class="list-item"
+          :class="{ 'selected': selectedSample?.id === sample.id }"
+          @click="selectedSample = sample"
+        >
+          <div class="item-top">
+            <span class="app-tag">{{ sample.source_app }}</span>
+            <span class="score-tag" :class="getResonanceClass(sample.distance)">
+              {{ getScore(sample.distance) }}% Match
+            </span>
+          </div>
+          <div class="item-preview">{{ sample.content }}</div>
+          <div class="item-bottom">
+            <span class="time">{{ formatDate(sample.created_at) }}</span>
+            <IconButton 
+              size="sm" 
+              variant="danger" 
+              icon="🗑" 
+              title="Delete" 
+              @click.stop="deleteSample(sample.id)" 
+            />
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Modal Dialog -->
-    <Transition name="modal">
-      <div v-if="selectedSample" class="modal-overlay" @click.self="selectedSample = null">
-        <div class="modal-container">
-          <div class="modal-header">
-            <div class="modal-title">
-              <h3>Resonance Analysis</h3>
-              <span class="modal-source" v-if="getSourceFile(selectedSample.metadata)">
-                Source: {{ getSourceFile(selectedSample.metadata) }}
-              </span>
-            </div>
-            <IconButton size="lg" @click="selectedSample = null" />
+    <!-- RIGHT PANE: Detail View -->
+    <div class="detail-pane">
+      <div v-if="!selectedSample" class="detail-empty">
+        <div class="empty-illustration">✧</div>
+        <p>Select a resonance from the list to view its deep associations.</p>
+      </div>
+      
+      <div v-else class="detail-content">
+        <div class="detail-header">
+          <div class="meta-info">
+            <span class="score-badge">{{ getScore(selectedSample.distance) }}% Resonance</span>
+            <span class="source-info" v-if="getSourceFile(selectedSample.metadata)">
+              Found in: <strong>{{ getSourceFile(selectedSample.metadata) }}</strong>
+            </span>
           </div>
-          <div class="modal-body">
-            <div class="modal-pane">
-              <label>Captured Content</label>
-              <div class="markdown-view" v-html="renderMarkdown(selectedSample.content)"></div>
-            </div>
-            
-            <div class="modal-divider">
-              <div class="line"></div>
-              <div class="score-node">{{ ((1-selectedSample.distance)*100).toFixed(0) }}% Similarity</div>
-              <div class="line"></div>
-            </div>
+          <button class="synth-btn" @click="openDeepBridge(selectedSample)">
+            ✨ Synthesize in Gemini
+          </button>
+        </div>
 
-            <div class="modal-pane association" v-if="selectedSample.matched_content">
-              <label>Associated Knowledge</label>
-              <div class="markdown-view" v-html="renderMarkdown(selectedSample.matched_content)"></div>
-            </div>
+        <div class="markdown-scroller">
+          <div class="content-block captured-block">
+            <div class="block-label">Captured from {{ selectedSample.source_app }}</div>
+            <div class="markdown-view" v-html="renderMarkdown(selectedSample.content)"></div>
           </div>
-          <div class="modal-footer">
-            <button class="synthesis-btn-large" @click="openDeepBridge(selectedSample)">
-              ✨ Synthesize with Gemini
-            </button>
+
+          <div class="connection-visual">
+            <div class="v-line"></div>
+            <div class="v-dot"></div>
+            <div class="v-line"></div>
+          </div>
+
+          <div class="content-block matched-block" v-if="selectedSample.matched_content">
+            <div class="block-label">Associated Knowledge</div>
+            <div class="markdown-view" v-html="renderMarkdown(selectedSample.matched_content)"></div>
           </div>
         </div>
       </div>
-    </Transition>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.triage-hub-root {
-  padding: 32px;
-  background: transparent;
-  flex-grow: 1;
-  overflow-y: auto;
+/* Split View Root */
+.split-view-root {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background: #0f0f0f;
+  overflow: hidden;
 }
 
-.header {
+/* Master Pane (List) */
+.master-pane {
+  width: 380px;
+  min-width: 300px;
+  border-right: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  background: #141416;
+  flex-shrink: 0;
+}
+
+.pane-header {
+  padding: 20px;
   display: flex;
   justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 32px;
-  max-width: 800px;
-  margin-left: auto;
-  margin-right: auto;
+  align-items: center;
+  border-bottom: 1px solid #2a2a2a;
 }
 
-h2 { margin: 0; font-size: 1.8rem; font-weight: 800; color: #fff; }
-.count-badge { font-size: 0.8rem; color: #555; }
+.title-area h2 { margin: 0; font-size: 1.2rem; font-weight: 800; color: #fff; }
+.title-area .count { font-size: 0.75rem; color: #666; }
 
-.header-btns {
-  display: flex;
-  gap: 12px;
-}
+.actions { display: flex; gap: 8px; }
+.icon-btn { background: transparent; border: 1px solid #333; color: #888; border-radius: 6px; cursor: pointer; padding: 4px 8px; }
+.icon-btn:hover { background: rgba(255,255,255,0.05); color: #fff; }
 
-.debug-btn {
-  background: rgba(255, 255, 0, 0.1);
-  border: 1px solid rgba(255, 255, 0, 0.3);
-  color: #ffcc00;
-  padding: 8px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 0.8rem;
-  font-weight: bold;
-}
+.list-state { padding: 40px 20px; text-align: center; color: #666; }
+.list-state .hint { font-size: 0.8rem; color: #444; }
 
-.toast {
-  position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
-  background: #646cff; color: white; padding: 12px 32px;
-  border-radius: 50px; font-weight: 700; z-index: 3000;
-  box-shadow: 0 10px 30px rgba(100, 108, 255, 0.4);
-}
-
-.samples-list {
-  display: flex; flex-direction: column; gap: 40px;
-  max-width: 800px; margin: 0 auto;
-}
-
-.sample-card {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 24px; padding: 28px;
-  transition: all 0.3s;
-}
-
-.sample-card:hover { 
-  border-color: rgba(100, 108, 255, 0.4);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.app-dot { width: 10px; height: 10px; background: #646cff; border-radius: 50%; box-shadow: 0 0 10px #646cff; }
-.app-name { font-weight: 700; font-size: 1rem; margin-left: 10px; color: #eee; }
-
-.resonance-score {
-  font-family: 'JetBrains Mono', monospace; font-weight: 800; color: #b794ff; font-size: 0.9rem;
-  background: rgba(183, 148, 255, 0.1); padding: 4px 12px; border-radius: 20px;
-}
-
-.card-content-area { cursor: pointer; display: flex; flex-direction: column; }
-
-.content-block {
-  display: flex; flex-direction: column; gap: 8px;
-}
-
-.content-block label {
-  font-size: 0.65rem; font-weight: 900; text-transform: uppercase; color: #444; letter-spacing: 1px;
-}
-
-.matched-header {
-  display: flex; justify-content: space-between; align-items: center;
-}
-
-.source-tag {
-  font-size: 0.7rem; color: #646cff; background: rgba(100, 108, 255, 0.1);
-  padding: 2px 8px; border-radius: 4px; font-weight: 600;
-}
-
-.preview-wrap {
-  position: relative; max-height: 140px; overflow: hidden;
-  border-radius: 12px; background: rgba(255, 255, 255, 0.015);
+.list-content {
+  flex-grow: 1;
+  overflow-y: auto;
   padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.fade-overlay {
-  position: absolute; bottom: 0; left: 0; width: 100%; height: 40px;
-  background: linear-gradient(to top, #141414, transparent);
+/* List Items */
+.list-item {
+  padding: 16px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.markdown-content { font-size: 0.95rem; color: #bbb; line-height: 1.5; }
+.list-item:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); }
+.list-item.selected { background: rgba(100, 108, 255, 0.1); border-color: #646cff; }
 
-.connector-v {
-  height: 30px; display: flex; align-items: center; justify-content: center;
+.item-top { display: flex; justify-content: space-between; align-items: center; }
+.app-tag { font-size: 0.75rem; font-weight: 700; color: #ccc; }
+.score-tag { font-size: 0.7rem; font-weight: 800; padding: 2px 8px; border-radius: 10px; background: rgba(0,0,0,0.3); }
+.score-tag.high { color: #b794ff; }
+.score-tag.mid { color: #64d2ff; }
+.score-tag.low { color: #888; }
+
+.item-preview {
+  font-size: 0.85rem; color: #999; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.connector-v .dot {
-  width: 4px; height: 4px; background: #333; border-radius: 50%;
+.list-item.selected .item-preview { color: #ccc; }
+
+.item-bottom { display: flex; justify-content: space-between; align-items: center; }
+.time { font-size: 0.7rem; color: #555; }
+
+
+/* Detail Pane (Content) */
+.detail-pane {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  background: #0a0a0c;
+  overflow: hidden;
 }
 
-.expand-hint { font-size: 0.7rem; color: #333; text-align: center; margin-top: 12px; font-style: italic; }
-
-.card-footer {
-  margin-top: 24px; padding-top: 20px; border-top: 1px solid rgba(255, 255, 255, 0.05);
-  display: flex; justify-content: space-between; align-items: center;
+.detail-empty {
+  flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: #444; font-size: 0.9rem;
 }
-.time { font-size: 0.75rem; color: #444; }
+.empty-illustration { font-size: 3rem; margin-bottom: 16px; opacity: 0.5; color: #646cff; }
 
-.synthesis-btn {
-  background: #646cff; color: white; border: none;
-  padding: 10px 24px; border-radius: 10px; font-weight: 700; cursor: pointer;
+.detail-content {
+  display: flex; flex-direction: column; height: 100%;
+}
+
+.detail-header {
+  padding: 24px 40px;
+  border-bottom: 1px solid #1a1a1a;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #0d0d10;
+}
+
+.meta-info { display: flex; align-items: center; gap: 16px; }
+.score-badge { font-size: 1.2rem; font-weight: 800; color: #b794ff; font-family: 'JetBrains Mono', monospace; }
+.source-info { font-size: 0.85rem; color: #888; background: rgba(255,255,255,0.05); padding: 4px 12px; border-radius: 6px; }
+.source-info strong { color: #ccc; }
+
+.synth-btn {
+  background: #646cff; color: white; border: none; padding: 12px 24px;
+  border-radius: 10px; font-weight: 800; cursor: pointer; transition: all 0.2s;
   box-shadow: 0 4px 15px rgba(100, 108, 255, 0.2);
 }
+.synth-btn:hover { background: #535bf2; transform: translateY(-1px); }
 
-/* Modal */
-.modal-overlay {
-  position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-  background: rgba(0, 0, 0, 0.9); backdrop-filter: blur(16px);
-  display: flex; justify-content: center; align-items: center; z-index: 2000;
+.markdown-scroller {
+  flex-grow: 1;
+  overflow-y: auto;
   padding: 40px;
+  display: flex;
+  flex-direction: column;
 }
 
-.modal-container {
-  background: #0f0f12; width: 100%; max-width: 1000px; height: 90vh;
-  border-radius: 28px; border: 1px solid #222; display: flex; flex-direction: column;
-  overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,0.8);
+.content-block {
+  background: #141416;
+  border: 1px solid #222;
+  border-radius: 16px;
+  padding: 24px 32px;
 }
 
-.modal-header {
-  padding: 28px 40px; border-bottom: 1px solid #222;
-  display: flex; justify-content: space-between; align-items: center;
+.captured-block { border-left: 3px solid #646cff; }
+.matched-block { border-left: 3px solid #4CAF50; background: #111411; }
+
+.block-label {
+  font-size: 0.75rem; font-weight: 900; color: #666; text-transform: uppercase;
+  letter-spacing: 1px; margin-bottom: 16px;
 }
+.captured-block .block-label { color: #646cff; }
+.matched-block .block-label { color: #4CAF50; }
 
-.modal-title h3 { margin: 0; font-size: 1.5rem; color: #fff; }
-.modal-source { font-size: 0.8rem; color: #646cff; margin-top: 4px; display: block; font-weight: 600; }
-
-.modal-body { flex-grow: 1; overflow-y: auto; padding: 40px; display: flex; flex-direction: column; gap: 40px; }
-.modal-pane label { color: #646cff; font-weight: 800; font-size: 0.75rem; text-transform: uppercase; display: block; margin-bottom: 20px; letter-spacing: 1px; }
-
+/* Markdown Styles */
 .markdown-view { color: #ccc; line-height: 1.7; font-size: 1.05rem; }
-
-/* Base Markdown Styles */
-:deep(.markdown-view h1), :deep(.markdown-view h2) { color: #fff; margin-top: 1.2em; font-size: 1.2rem; border-bottom: 1px solid #333; padding-bottom: 8px; }
-:deep(.markdown-view code) { background: rgba(100, 108, 255, 0.2); color: #b794ff; padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; }
+:deep(.markdown-view p) { margin-top: 0; }
+:deep(.markdown-view h1), :deep(.markdown-view h2), :deep(.markdown-view h3) { color: #fff; margin-top: 1.5em; border-bottom: 1px solid #222; padding-bottom: 8px; }
+:deep(.markdown-view code) { background: rgba(255, 255, 255, 0.1); color: #fff; padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.9em; }
 :deep(.markdown-view pre) { background: #000; padding: 20px; border-radius: 12px; overflow-x: auto; border: 1px solid #222; margin: 16px 0; }
-:deep(.markdown-view blockquote) { border-left: 4px solid #646cff; padding-left: 20px; color: #999; background: rgba(255,255,255,0.02); padding: 12px 20px; border-radius: 0 8px 8px 0; }
+:deep(.markdown-view blockquote) { border-left: 4px solid #4CAF50; padding-left: 20px; color: #999; background: rgba(76, 175, 80, 0.05); padding: 12px 20px; border-radius: 0 8px 8px 0; }
 
-.modal-divider { display: flex; align-items: center; gap: 20px; }
-.modal-divider .line { flex-grow: 1; height: 1px; background: #222; }
-.score-node { 
-  background: #1a1a2a; border: 1px solid #646cff; color: #646cff;
-  padding: 6px 18px; border-radius: 30px; font-weight: 800; font-size: 1rem; 
+/* Visual Connection */
+.connection-visual { display: flex; flex-direction: column; align-items: center; height: 60px; }
+.v-line { width: 2px; flex-grow: 1; background: #222; }
+.v-dot { width: 8px; height: 8px; background: #444; border-radius: 50%; border: 2px solid #222; }
+
+/* Toast */
+.toast {
+  position: fixed; bottom: 30px; right: 30px;
+  background: #4CAF50; color: white; padding: 12px 24px;
+  border-radius: 8px; font-weight: 700; z-index: 3000;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
 }
 
-.modal-footer { padding: 32px 40px; border-top: 1px solid #222; text-align: center; background: rgba(0,0,0,0.2); }
-.synthesis-btn-large {
-  background: #646cff; color: white; border: none; padding: 18px 80px;
-  border-radius: 20px; font-weight: 800; font-size: 1.2rem; cursor: pointer;
-  transition: all 0.3s;
-}
-.synthesis-btn-large:hover { transform: scale(1.02); box-shadow: 0 8px 25px rgba(100, 108, 255, 0.4); }
-
-/* Transitions */
-.modal-enter-active, .modal-leave-active { transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
-.modal-enter-from, .modal-leave-to { opacity: 0; transform: translateY(40px) scale(0.95); }
-
-.state-container { text-align: center; margin-top: 120px; color: #444; }
-.empty-icon { font-size: 4rem; opacity: 0.1; }
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

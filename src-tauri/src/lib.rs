@@ -14,6 +14,7 @@ use tauri::menu::{Menu, MenuItem};
 use log::info;
 use arboard::Clipboard;
 use serde::Serialize;
+use tauri_plugin_notification::NotificationExt;
 
 #[derive(Clone, Serialize)]
 struct ResonancePayload {
@@ -102,27 +103,24 @@ fn show_main_window(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn ping_test(app: tauri::AppHandle) {
+    info!("DEBUG: Broadcasting Ping Test Event...");
     let payload = ResonancePayload {
         id: 1,
-        app_name: "Solid-Dark-Test".to_string(),
+        app_name: "Mock Application".to_string(),
         score: 0.99,
-        content: "If you see a solid dark card with rounded corners, the new strategy works!".to_string(),
-        matched_content: "Logic verified.".to_string(),
+        content: "This is a test captured text. Imagine this is a long note you copied from somewhere.".to_string(),
+        matched_content: "This is the matched knowledge from your local system. It correlates highly with the captured text.".to_string(),
     };
     
-    if let Some(w) = app.get_webview_window("resonance-bubble") {
-        // 1. Show the window FIRST to wake up the JS engine
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-        
-        // 2. Emit the event AFTER a tiny delay to ensure JS is ready
-        let w_clone = w.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            let _ = w_clone.emit("new-resonance", &payload);
-        });
-    }
+    // 1. Emit to main window to update UI
+    let _ = app.emit_to("main", "new-resonance", &payload);
+
+    // 2. Trigger native notification
+    let _ = app.notification()
+        .builder()
+        .title("Ping Test Resonance")
+        .body("99% Match: This is a test captured t...")
+        .show();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -142,7 +140,13 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => { let _ = app.get_webview_window("main").unwrap().show(); }
+                    "show" => { 
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.unminimize();
+                            let _ = w.set_focus();
+                        }
+                    }
                     "quit" => { app.exit(0); }
                     _ => {}
                 })
