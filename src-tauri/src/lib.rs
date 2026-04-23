@@ -109,9 +109,19 @@ fn ping_test(app: tauri::AppHandle) {
         content: "If you see a solid dark card with rounded corners, the new strategy works!".to_string(),
         matched_content: "Logic verified.".to_string(),
     };
-    let _ = app.emit("new-resonance", &payload);
+    
     if let Some(w) = app.get_webview_window("resonance-bubble") {
+        // 1. Show the window FIRST to wake up the JS engine
         let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        
+        // 2. Emit the event AFTER a tiny delay to ensure JS is ready
+        let w_clone = w.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let _ = w_clone.emit("new-resonance", &payload);
+        });
     }
 }
 
