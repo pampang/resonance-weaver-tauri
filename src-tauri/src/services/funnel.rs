@@ -48,6 +48,7 @@ impl Funnel {
             let score = (1.0 - distance).max(0.0).min(1.0);
 
             if score < config.threshold {
+                log::info!("Match found but score {:.2} is below threshold {:.2}. Ignoring.", score, config.threshold);
                 return Ok(());
             }
 
@@ -79,6 +80,8 @@ impl Funnel {
                 .title(format!("Resonance with {}", app_name))
                 .body(format!("{}% Match: {}", (score * 100.0) as i32, snippet))
                 .show();
+        } else {
+            log::info!("Vector search returned empty matches.");
         }
 
         Ok(())
