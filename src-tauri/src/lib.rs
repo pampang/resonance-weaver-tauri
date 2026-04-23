@@ -3,7 +3,7 @@ mod config;
 mod services;
 
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 use crate::services::vector_store::VectorStore;
 use crate::services::indexer::Indexer;
 use crate::services::db::Database;
@@ -13,6 +13,16 @@ use tauri::tray::TrayIconBuilder;
 use tauri::menu::{Menu, MenuItem};
 use log::info;
 use arboard::Clipboard;
+use serde::Serialize;
+
+#[derive(Clone, Serialize)]
+struct ResonancePayload {
+    id: i64,
+    app_name: String,
+    score: f32,
+    content: String,
+    matched_content: String,
+}
 
 struct AppState {
     vector_store: Arc<VectorStore>,
@@ -58,23 +68,14 @@ fn delete_sample(state: tauri::State<'_, AppState>, id: i64) -> Result<(), Strin
 #[tauri::command]
 fn open_deep_bridge(content: String, matched_content: Option<String>) -> Result<String, String> {
     let prompt = if let Some(matched) = matched_content {
-        format!(
-            "Please synthesize and analyze the relationship between the following two pieces of information:\n\n### CAPTURED CONTENT (from clipboard):\n{}\n\n### ASSOCIATED KNOWLEDGE (from my local library):\n{}\n\nProvide a deep synthesis that integrates these concepts.",
-            content, matched
-        )
+        format!("### CAPTURED\n{}\n\n### MATCHED\n{}\n\nSynthesize...", content, matched)
     } else {
         content
     };
-    
-    // 1. Copy to clipboard
     let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
-    cb.set_text(prompt.clone()).map_err(|e| e.to_string())?;
-    
-    // 2. Open Gemini
-    let url = "https://gemini.google.com/app";
-    let _ = open::that(url);
-
-    Ok("Synthesized prompt copied to clipboard! Paste it into Gemini.".to_string())
+    let _ = cb.set_text(prompt);
+    let _ = open::that("https://gemini.google.com/app");
+    Ok("Copied!".to_string())
 }
 
 #[tauri::command]
@@ -84,13 +85,8 @@ fn get_running_apps() -> Result<Vec<String>, String> {
         .arg("tell application \"System Events\" to get name of every process whose background only is false")
         .output()
         .map_err(|e| e.to_string())?;
-
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut apps: Vec<String> = stdout
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let mut apps: Vec<String> = stdout.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     apps.sort();
     apps.dedup();
     Ok(apps)
@@ -104,6 +100,21 @@ fn show_main_window(app: tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn ping_test(app: tauri::AppHandle) {
+    let payload = ResonancePayload {
+        id: 1,
+        app_name: "Solid-Dark-Test".to_string(),
+        score: 0.99,
+        content: "If you see a solid dark card with rounded corners, the new strategy works!".to_string(),
+        matched_content: "Logic verified.".to_string(),
+    };
+    let _ = app.emit("new-resonance", &payload);
+    if let Some(w) = app.get_webview_window("resonance-bubble") {
+        let _ = w.show();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -113,7 +124,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            
             let show = MenuItem::with_id(app, "show", "Show Hub", true, None::<&str>).unwrap();
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).unwrap();
             let menu = Menu::with_items(app, &[&show, &quit]).unwrap();
@@ -122,14 +132,8 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        let window = app.get_webview_window("main").unwrap();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                    "quit" => {
-                        app.exit(0);
-                    }
+                    "show" => { let _ = app.get_webview_window("main").unwrap().show(); }
+                    "quit" => { app.exit(0); }
                     _ => {}
                 })
                 .build(app)
@@ -146,9 +150,7 @@ pub fn run() {
                 let funnel = Arc::new(Funnel::new(handle.clone(), vector_store.clone(), db.clone()));
                 let clipboard_listener = ClipboardListener::new(handle.clone(), funnel);
                 
-                tokio::spawn(async move {
-                    clipboard_listener.start().await;
-                });
+                tokio::spawn(async move { clipboard_listener.start().await; });
                 
                 app.manage(AppState { vector_store, _indexer: indexer, db });
             });
@@ -157,7 +159,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_config, save_config, search_resonance, 
             get_samples, delete_sample, open_deep_bridge, 
-            reindex, get_running_apps, show_main_window
+            reindex, get_running_apps, show_main_window, ping_test
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

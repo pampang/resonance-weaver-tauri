@@ -20,14 +20,15 @@
       {
         "label": "resonance-bubble",
         "title": "New Resonance",
-        "width": 300,
-        "height": 120,
+        "width": 320,
+        "height": 140,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
         "visible": false,
         "resizable": false,
-        "skipTaskbar": true
+        "skipTaskbar": true,
+        "shadow": false
       }
     ],
     "security": {

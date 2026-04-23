@@ -50,31 +50,28 @@ impl Funnel {
                 return Ok(());
             }
 
-            info!("Resonance found! Score: {:.2}", score);
+            info!("Resonance found! Broadcasting to all windows...");
             let id = chrono::Utc::now().timestamp_millis();
             self.db.add_sample(content.clone(), matched_text.clone(), app_name.clone(), distance).await?;
 
-            // Trigger the Bubble Window with correct positioning
-            if let Some(window) = self.app_handle.get_webview_window("resonance-bubble") {
-                // Position at bottom right
-                if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
-                    let size = monitor.size();
-                    let scale_factor = monitor.scale_factor();
-                    
-                    let x = (size.width as f64 / scale_factor) - 320.0;
-                    let y = (size.height as f64 / scale_factor) - 180.0;
-                    
-                    let _ = window.set_position(Position::Logical(LogicalPosition { x, y }));
-                }
+            let payload = ResonancePayload {
+                id,
+                app_name,
+                score,
+                content,
+                matched_content: matched_text,
+            };
 
-                let _ = window.emit("new-resonance", ResonancePayload {
-                    id,
-                    app_name,
-                    score,
-                    content,
-                    matched_content: matched_text,
-                });
-                let _ = window.show();
+            // Global broadcast instead of window-specific emit
+            let _ = self.app_handle.emit("new-resonance", payload);
+
+            // Force show and unminimize all test windows
+            let labels = vec!["test-vibrancy", "test-pure-css", "test-safe-standard", "resonance-bubble"];
+            for label in labels {
+                if let Some(w) = self.app_handle.get_webview_window(label) {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                }
             }
         }
 

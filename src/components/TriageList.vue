@@ -108,9 +108,12 @@ onMounted(() => {
         <h2>Triage Hub</h2>
         <span class="count-badge">{{ samples.length }} Resonances</span>
       </div>
-      <button class="refresh-btn" @click="fetchSamples">
-        <span class="icon">🔄</span> Refresh
-      </button>
+      <div class="header-btns">
+        <button class="debug-btn" @click="invoke('ping_test')">Ping Test Event</button>
+        <button class="refresh-btn" @click="fetchSamples">
+          <span class="icon">🔄</span> Refresh
+        </button>
+      </div>
     </div>
 
     <!-- Toast -->
@@ -247,9 +250,20 @@ onMounted(() => {
 h2 { margin: 0; font-size: 1.8rem; font-weight: 800; color: #fff; }
 .count-badge { font-size: 0.8rem; color: #555; }
 
-.refresh-btn {
-  background: #1a1a1a; border: 1px solid #333; color: #888;
-  padding: 8px 16px; border-radius: 8px; cursor: pointer;
+.header-btns {
+  display: flex;
+  gap: 12px;
+}
+
+.debug-btn {
+  background: rgba(255, 255, 0, 0.1);
+  border: 1px solid rgba(255, 255, 0, 0.3);
+  color: #ffcc00;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: bold;
 }
 
 .toast {
