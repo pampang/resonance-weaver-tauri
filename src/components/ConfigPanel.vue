@@ -9,6 +9,7 @@ interface Config {
   kb_sources: string[];
   app_whitelist: string[];
   threshold: number;
+  embedding_model: string;
 }
 
 interface IndexingProgress {
@@ -22,29 +23,34 @@ interface IndexingProgress {
 const config = ref<Config>({
   kb_sources: [],
   app_whitelist: [],
-  threshold: 0.7
+  threshold: 0.8,
+  embedding_model: 'nomic-embed-text'
 });
 
-const app_whitelist_str = ref('');
+const manual_app_name = ref('');
 const running_apps = ref<string[]>([]);
 const is_saving = ref(false);
 const is_reindexing = ref(false);
 const progress = ref<IndexingProgress | null>(null);
+const toastMsg = ref('');
+
+const showToast = (msg: string) => {
+  toastMsg.value = msg;
+  setTimeout(() => { toastMsg.value = ''; }, 4000);
+};
 
 let unlistenProgress: UnlistenFn | null = null;
 
 const loadConfig = async () => {
   const c = await invoke('get_config') as Config;
   config.value = c;
-  app_whitelist_str.value = c.app_whitelist.join(', ');
 };
 
 const saveConfig = async () => {
   is_saving.value = true;
-  config.value.app_whitelist = app_whitelist_str.value.split(',').map(s => s.trim()).filter(s => s !== '');
   try {
     await invoke('save_config', { config: config.value });
-    alert('Configuration saved.');
+    showToast('Configuration saved.');
   } finally {
     is_saving.value = false;
   }
@@ -56,7 +62,9 @@ const pickFolder = async () => {
     multiple: false,
   });
   if (selected && typeof selected === 'string') {
-    config.value.kb_sources.push(selected);
+    if (!config.value.kb_sources.includes(selected)) {
+      config.value.kb_sources.push(selected);
+    }
   }
 };
 
@@ -70,7 +78,7 @@ const triggerReindex = async () => {
   try {
     await invoke('reindex');
   } catch (e) {
-    alert('Error: ' + e);
+    showToast('Error: ' + e);
   }
 };
 
@@ -83,11 +91,15 @@ const fetchRunningApps = async () => {
 };
 
 const addToWhitelist = (appName: string) => {
-  const current = app_whitelist_str.value.split(',').map(s => s.trim()).filter(s => s !== '');
-  if (!current.includes(appName)) {
-    current.push(appName);
-    app_whitelist_str.value = current.join(', ');
+  const name = appName.trim();
+  if (name && !config.value.app_whitelist.includes(name)) {
+    config.value.app_whitelist.push(name);
   }
+  manual_app_name.value = '';
+};
+
+const removeFromWhitelist = (index: number) => {
+  config.value.app_whitelist.splice(index, 1);
 };
 
 onMounted(async () => {
@@ -110,6 +122,10 @@ onUnmounted(() => {
 
 <template>
   <div class="config-panel">
+    <!-- Toast -->
+    <Transition name="fade">
+      <div v-if="toastMsg" class="toast">{{ toastMsg }}</div>
+    </Transition>
     <div class="header-actions">
       <h2>Configuration</h2>
       <button class="reindex-btn" :disabled="is_reindexing" @click="triggerReindex">
@@ -130,6 +146,7 @@ onUnmounted(() => {
 
     <div class="section">
       <h3>Knowledge Sources</h3>
+      <p class="hint">Folders to index for semantic matching</p>
       <div v-for="(source, index) in config.kb_sources" :key="index" class="input-group">
         <input :value="source" readonly />
         <IconButton 
@@ -144,13 +161,37 @@ onUnmounted(() => {
 
     <div class="section">
       <h3>App Whitelist</h3>
-      <p class="hint">Comma separated app names to monitor</p>
-      <textarea v-model="app_whitelist_str" placeholder="e.g. Slack, Discord, Notes"></textarea>
+      <p class="hint">Monitor clipboard only when these apps are frontmost</p>
+      
+      <div class="whitelist-chips">
+        <div v-for="(app, index) in config.app_whitelist" :key="app" class="whitelist-chip">
+          <span>{{ app }}</span>
+          <button class="remove-chip" @click="removeFromWhitelist(index)">✕</button>
+        </div>
+        <div v-if="config.app_whitelist.length === 0" class="empty-state">
+          No apps whitelisted.
+        </div>
+      </div>
+
+      <div class="add-manual">
+        <input 
+          v-model="manual_app_name" 
+          placeholder="Type app name..." 
+          @keyup.enter="addToWhitelist(manual_app_name)"
+        />
+        <button class="small-add-btn" @click="addToWhitelist(manual_app_name)">Add</button>
+      </div>
       
       <div class="running-apps">
         <h4>Running Apps (Click to add):</h4>
         <div class="app-chips">
-          <span v-for="app in running_apps" :key="app" class="app-chip" @click="addToWhitelist(app)">
+          <span 
+            v-for="app in running_apps" 
+            :key="app" 
+            class="app-chip" 
+            :class="{ disabled: config.app_whitelist.includes(app) }"
+            @click="addToWhitelist(app)"
+          >
             {{ app }}
           </span>
         </div>
@@ -158,10 +199,22 @@ onUnmounted(() => {
     </div>
 
     <div class="section">
+      <h3>Embedding Model</h3>
+      <p class="hint">Model used for semantic analysis (requires download in Ollama)</p>
+      <select v-model="config.embedding_model" class="model-select">
+        <option value="nomic-embed-text">nomic-embed-text (Fast, General)</option>
+        <option value="bge-m3">bge-m3 (Better for Chinese/Multi-lingual)</option>
+      </select>
+      <p class="warning-hint" v-if="config.embedding_model !== 'nomic-embed-text'">
+        Make sure you have run `ollama pull {{ config.embedding_model }}`
+      </p>
+    </div>
+
+    <div class="section">
       <h3>Resonance Threshold: {{ config.threshold }}</h3>
       <div class="threshold-control">
-        <input type="range" v-model.number="config.threshold" min="0" max="1" step="0.05" />
-        <span class="hint">Lower = stricter, Higher = more matches</span>
+        <input type="range" v-model.number="config.threshold" min="0" max="1" step="0.01" />
+        <span class="hint">Lower = easier matches, Higher = stricter (recommended: 0.80)</span>
       </div>
     </div>
 
@@ -246,14 +299,38 @@ h3 {
   align-items: center;
 }
 
-input[readonly] {
+input[readonly], .add-manual input {
   flex-grow: 1;
-  padding: 12px;
+  padding: 10px 14px;
   background: #2a2a2a;
   border: 1px solid #444;
   color: #ccc;
   border-radius: 8px;
   font-size: 0.9rem;
+  outline: none;
+}
+
+.add-manual input:focus {
+  border-color: #646cff;
+}
+
+.add-manual {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.small-add-btn {
+  background: #333;
+  color: #fff;
+  border: 1px solid #444;
+  padding: 0 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.small-add-btn:hover {
+  background: #444;
 }
 
 .add-btn {
@@ -273,20 +350,55 @@ input[readonly] {
   background: rgba(100, 108, 255, 0.1);
 }
 
-textarea {
-  width: 100%;
-  height: 100px;
-  background: #2a2a2a;
-  border: 1px solid #444;
-  color: white;
-  border-radius: 8px;
+.whitelist-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: #111;
   padding: 12px;
-  font-family: inherit;
-  resize: vertical;
+  border-radius: 8px;
+  min-height: 50px;
+  border: 1px solid #222;
+}
+
+.whitelist-chip {
+  background: #646cff;
+  color: white;
+  padding: 4px 10px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.remove-chip {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.remove-chip:hover {
+  color: white;
+}
+
+.empty-state {
+  color: #555;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
 }
 
 .running-apps {
-  margin-top: 16px;
+  margin-top: 20px;
 }
 
 .app-chips {
@@ -306,9 +418,30 @@ textarea {
   transition: all 0.2s;
 }
 
-.app-chip:hover {
-  background: #646cff;
+.app-chip:hover:not(.disabled) {
+  background: #444;
   color: white;
+}
+
+.app-chip.disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.model-select {
+  width: 100%;
+  padding: 10px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  color: white;
+  border-radius: 8px;
+  outline: none;
+}
+
+.warning-hint {
+  font-size: 0.75rem;
+  color: #ff9800;
+  margin-top: 8px;
 }
 
 .threshold-control {
@@ -359,4 +492,21 @@ input[type="range"] {
 .reindex-btn:hover {
   background: rgba(100, 108, 255, 0.1);
 }
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 30px;
+  right: 30px;
+  background: #4CAF50;
+  color: white;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-weight: 700;
+  z-index: 3000;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

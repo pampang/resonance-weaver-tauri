@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use reqwest::Client;
 use tauri::AppHandle;
 use tauri::Manager;
+use crate::config;
 use futures::StreamExt;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -24,7 +25,7 @@ struct OllamaEmbeddingRequest {
 }
 
 pub struct VectorStore {
-    pub table: Table,
+    pub table: Arc<tokio::sync::RwLock<Table>>,
 }
 
 impl VectorStore {
@@ -39,20 +40,23 @@ impl VectorStore {
         let db = connect(uri).execute().await.map_err(|e| e.to_string())?;
 
         let table_name = "resonance";
+        let config = config::load_config(app_handle);
+        let dim = if config.embedding_model == "bge-m3" { 1024 } else { 768 };
+
         let table = if db.table_names().execute().await.map_err(|e| e.to_string())?.contains(&table_name.to_string()) {
             db.open_table(table_name).execute().await.map_err(|e| e.to_string())?
         } else {
-            Self::create_empty_table(&db, table_name).await?
+            Self::create_empty_table(&db, table_name, dim).await?
         };
 
-        Ok(Self { table })
+        Ok(Self { table: Arc::new(tokio::sync::RwLock::new(table)) })
     }
 
-    async fn create_empty_table(db: &Connection, name: &str) -> Result<Table, String> {
+    async fn create_empty_table(db: &Connection, name: &str, dim: i32) -> Result<Table, String> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
             Field::new("text", DataType::Utf8, false),
-            Field::new("vector", DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), 768), false),
+            Field::new("vector", DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), dim), false),
             Field::new("metadata", DataType::Utf8, true),
         ]));
 
@@ -60,10 +64,10 @@ impl VectorStore {
         let text_array = StringArray::from(vec!["dummy"]);
         let metadata_array = StringArray::from(vec![None as Option<&str>]);
         
-        let vector_values = Float32Array::from(vec![0.0f32; 768]);
+        let vector_values = Float32Array::from(vec![0.0f32; dim as usize]);
         let vector_array = FixedSizeListArray::try_new(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            768,
+            dim,
             Arc::new(vector_values),
             None
         ).map_err(|e| e.to_string())?;
@@ -85,13 +89,30 @@ impl VectorStore {
     }
 
     pub async fn clear_table(&self) -> Result<(), String> {
-        // LanceDB Rust SDK doesn't have a simple "delete all", 
-        // the easiest way is to delete using a filter that matches everything.
-        self.table.delete("id >= 0").await.map_err(|e| e.to_string())?;
+        let table = self.table.read().await;
+        table.delete("id >= 0").await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    pub async fn get_embedding(text: &str) -> Result<Vec<f32>, String> {
+    pub async fn recreate_table(&self, app_handle: &AppHandle) -> Result<(), String> {
+        let config = config::load_config(app_handle);
+        let dim = if config.embedding_model == "bge-m3" { 1024 } else { 768 };
+        
+        let app_dir = app_handle.path().app_data_dir().expect("failed to get app data dir");
+        let db_path = app_dir.join("lancedb");
+        let uri = db_path.to_str().ok_or("Invalid path")?;
+        let db = connect(uri).execute().await.map_err(|e| e.to_string())?;
+
+        let table_name = "resonance";
+        db.drop_table(table_name, &[]).await.map_err(|e| e.to_string())?;
+        
+        let new_table = Self::create_empty_table(&db, table_name, dim).await?;
+        let mut table_lock = self.table.write().await;
+        *table_lock = new_table;
+        Ok(())
+    }
+
+    pub async fn get_embedding(text: &str, model: &str) -> Result<Vec<f32>, String> {
         let client = Client::builder()
             .no_proxy()
             .build()
@@ -99,7 +120,7 @@ impl VectorStore {
             
         let res = client.post("http://127.0.0.1:11434/api/embeddings")
             .json(&OllamaEmbeddingRequest {
-                model: "nomic-embed-text".to_string(),
+                model: model.to_string(),
                 prompt: text.to_string(),
             })
             .send()
@@ -127,16 +148,18 @@ impl VectorStore {
     }
 
     pub async fn add_resonance(&self, id: i64, text: String, embedding: Vec<f32>, metadata: Option<String>) -> Result<(), String> {
-        let schema = self.table.schema().await.map_err(|e| e.to_string())?;
+        let table = self.table.read().await;
+        let schema = table.schema().await.map_err(|e| e.to_string())?;
         
         let id_array = Int64Array::from(vec![id]);
         let text_array = StringArray::from(vec![text]);
         let metadata_array = StringArray::from(vec![metadata]);
         
         let vector_values = Float32Array::from(embedding);
+        let dim = vector_values.len() as i32;
         let vector_array = FixedSizeListArray::try_new(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            768,
+            dim,
             Arc::new(vector_values),
             None
         ).map_err(|e| e.to_string())?;
@@ -151,12 +174,13 @@ impl VectorStore {
             ],
         ).map_err(|e| e.to_string())?;
 
-        self.table.add(vec![batch]).execute().await.map_err(|e| e.to_string())?;
+        table.add(vec![batch]).execute().await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn search(&self, vector: Vec<f32>, limit: usize) -> Result<Vec<(String, String, f32)>, String> {
-        let query = self.table.query();
+        let table = self.table.read().await;
+        let query = table.query();
         let query = query
             .nearest_to(vector).map_err(|e| e.to_string())?
             .distance_type(DistanceType::Cosine)

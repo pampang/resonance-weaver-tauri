@@ -3,7 +3,7 @@ mod config;
 mod services;
 
 use std::sync::Arc;
-use tauri::{Manager, Emitter};
+use tauri::{Manager, Emitter, WebviewWindowBuilder, WebviewUrl};
 use crate::services::vector_store::VectorStore;
 use crate::services::indexer::Indexer;
 use crate::services::db::Database;
@@ -39,9 +39,18 @@ fn get_config(app: tauri::AppHandle) -> config::AppConfig {
 #[tauri::command]
 async fn save_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle, config: config::AppConfig) -> Result<(), String> {
     info!("Saving configuration...");
+    let old_config = config::load_config(&app);
+    let sources_changed = old_config.kb_sources != config.kb_sources;
+    
     config::save_config(&app, &config)?;
-    state._indexer.rebuild_watcher().await?;
-    let _ = state._indexer.trigger_full_index().await;
+    
+    if sources_changed {
+        info!("Knowledge sources changed, triggering re-index...");
+        state._indexer.rebuild_watcher().await?;
+        let _ = state._indexer.trigger_full_index().await;
+    } else {
+        info!("No changes to knowledge sources, skipping re-index.");
+    }
     Ok(())
 }
 
@@ -51,10 +60,12 @@ async fn reindex(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn search_resonance(state: tauri::State<'_, AppState>, text: String) -> Result<Vec<(String, String, f32)>, String> {
-    let embedding = VectorStore::get_embedding(&text).await?;
-    state.vector_store.search(embedding, 3).await
+async fn search_resonance(state: tauri::State<'_, AppState>, app: tauri::AppHandle, text: String) -> Result<Vec<(String, String, f32)>, String> {
+    let config = config::load_config(&app);
+    let embedding = VectorStore::get_embedding(&text, &config.embedding_model).await?;
+    state.vector_store.search(embedding, 5).await
 }
+
 
 #[tauri::command]
 fn get_samples(state: tauri::State<'_, AppState>) -> Result<Vec<services::db::Sample>, String> {
@@ -102,6 +113,13 @@ fn show_main_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn dismiss_bubble(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("resonance-bubble") {
+        let _ = window.close();
+    }
+}
+
+#[tauri::command]
 fn ping_test(app: tauri::AppHandle) {
     info!("DEBUG: Broadcasting Ping Test Event...");
     let payload = ResonancePayload {
@@ -121,6 +139,45 @@ fn ping_test(app: tauri::AppHandle) {
         .title("Ping Test Resonance")
         .body("99% Match: This is a test captured t...")
         .show();
+
+    // 3. Show floating bubble
+    let app_clone = app.clone();
+    let bubble_payload = payload.clone();
+    std::thread::spawn(move || {
+        // Small delay for any existing bubble to close
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Some(w) = app_clone.get_webview_window("resonance-bubble") {
+            let _ = w.close();
+        }
+        // Get position at bottom-right of screen
+        let (x, y) = if let Ok(Some(monitor)) = app_clone.primary_monitor() {
+            let size = monitor.size();
+            let scale = monitor.scale_factor();
+            let lw = size.width as f64 / scale;
+            let lh = size.height as f64 / scale;
+            (lw - 440.0, lh - 300.0)
+        } else {
+            (1000.0, 500.0)
+        };
+        let _ = WebviewWindowBuilder::new(
+            &app_clone,
+            "resonance-bubble",
+            WebviewUrl::App("bubble.html".into()),
+        )
+        .title("Resonance")
+        .inner_size(420.0, 260.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .position(x, y)
+        .build();
+
+        // Emit data after window loads
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let _ = app_clone.emit_to("resonance-bubble", "bubble-data", &bubble_payload);
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -173,7 +230,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_config, save_config, search_resonance, 
             get_samples, delete_sample, open_deep_bridge, 
-            reindex, get_running_apps, show_main_window, ping_test
+            reindex, get_running_apps, show_main_window, ping_test,
+            dismiss_bubble
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

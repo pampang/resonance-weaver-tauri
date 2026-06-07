@@ -40,6 +40,7 @@ impl Indexer {
     pub async fn rebuild_watcher(&self) -> Result<(), String> {
         let config = config::load_config(&self.app_handle);
         let vector_store = self.vector_store.clone();
+        let app_handle = self.app_handle.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel(100);
 
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
@@ -61,7 +62,7 @@ impl Indexer {
             while let Some(event) = rx.recv().await {
                 for path in event.paths {
                     if path.is_file() {
-                        let _ = Self::index_file(&vector_store, path).await;
+                        let _ = Self::index_file(&app_handle, &vector_store, path).await;
                     }
                 }
             }
@@ -73,9 +74,9 @@ impl Indexer {
     }
 
     pub async fn trigger_full_index(&self) -> Result<(), String> {
-        // 1. CLEAR THE INDEX FIRST to avoid old metadata noise
-        info!("Purging existing vector index for a clean slate...");
-        self.vector_store.clear_table().await?;
+        // 1. RECREATE THE TABLE to ensure schema (dimensions) match the current model
+        info!("Resetting vector index for a clean slate and correct schema...");
+        self.vector_store.recreate_table(&self.app_handle).await?;
 
         let config = config::load_config(&self.app_handle);
         let mut files_to_index = Vec::new();
@@ -96,7 +97,7 @@ impl Indexer {
                 percentage: (i as f32 / total as f32) * 100.0,
                 is_complete: false,
             });
-            let _ = Self::index_file(&self.vector_store, path).await;
+            let _ = Self::index_file(&self.app_handle, &self.vector_store, path).await;
         }
 
         let _ = self.app_handle.emit("indexing-progress", IndexingProgress {
@@ -129,19 +130,21 @@ impl Indexer {
         ["txt", "md", "markdown", "rs", "ts", "py", "js"].contains(&ext.as_str())
     }
 
-    async fn index_file(vector_store: &VectorStore, path: PathBuf) -> Result<(), String> {
+    async fn index_file(app_handle: &AppHandle, vector_store: &VectorStore, path: PathBuf) -> Result<(), String> {
         let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        
+        let config = config::load_config(app_handle);
+
         let chunks = Self::split_text_recursively(&content, 1000, 200);
-        
+
         for (i, chunk_content) in chunks.into_iter().enumerate() {
-            if chunk_content.trim().len() < 40 { continue; }
+            if chunk_content.trim().len() < 20 { continue; }
 
             // Context Injection for better relevance
-            let augmented_content = format!("[Source: {}]\n{}", file_name, chunk_content);
-            
-            match VectorStore::get_embedding(&augmented_content).await {
+            // nomic-embed-text requires search_document: prefix for indexing
+            let augmented_content = format!("search_document: [Source: {}]\n{}", file_name, chunk_content);
+
+            match VectorStore::get_embedding(&augmented_content, &config.embedding_model).await {
                 Ok(embedding) => {
                     let id = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) + (i as i64);
                     let metadata = format!("file:{}|part:{}", file_name, i);
@@ -155,15 +158,18 @@ impl Indexer {
 
     fn split_text_recursively(text: &str, max_size: usize, overlap: usize) -> Vec<String> {
         // 0. AGGRESSIVE CLEANUP
-        // re_props matches properties even with leading spaces, case-insensitive
         let re_frontmatter = Regex::new(r"(?s)^---[\r\n].*?---").unwrap();
-        let re_props = Regex::new(r"(?mi)^\s*(type|status|tags|source|created|updated|summary|author|aliases|linter-yaml-title):.*$").unwrap();
-        let re_callout_headers = Regex::new(r"(?m)^>\s*\[!\w+\][+-]?\s*").unwrap(); // Strips "[!abstract]"
-        
+        let re_props = Regex::new(r"(?mi)^\s*(type|status|tags|source|created|updated|summary|author|aliases|linter-yaml-title|category|location):.*$").unwrap();
+        let re_callout_headers = Regex::new(r"(?m)^>\s*\[!\w+\][+-]?\s*").unwrap();
+        let re_emojis = Regex::new(r"[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]").unwrap();
+        // Strip common structural headers that trigger false positives (e.g. "## 🕸️ 语义突触", "- **原文存证**")
+        let re_structural = Regex::new(r"(?m)^(##\s*|###\s*|-\s*\*\*).*?(：|:)?\s*$").unwrap();
+
         let cleaned = re_frontmatter.replace(text, "");
         let cleaned = re_props.replace_all(&cleaned, "");
-        let cleaned = re_callout_headers.replace_all(&cleaned, "> "); // Keep the quote, strip the tag
-        
+        let cleaned = re_callout_headers.replace_all(&cleaned, "> ");
+        let cleaned = re_emojis.replace_all(&cleaned, "");
+        let cleaned = re_structural.replace_all(&cleaned, "");
         let mut final_chunks = Vec::new();
         let paragraphs: Vec<&str> = cleaned.split("\n\n").collect();
         let mut current_chunk = String::new();

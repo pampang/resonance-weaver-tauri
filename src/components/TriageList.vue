@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { marked } from 'marked';
@@ -19,6 +19,18 @@ const samples = ref<Sample[]>([]);
 const is_loading = ref(true);
 const toastMsg = ref('');
 const selectedSample = ref<Sample | null>(null);
+const searchQuery = ref('');
+const pendingDeleteId = ref<number | null>(null);
+
+const filteredSamples = computed(() => {
+  const q = searchQuery.value.toLowerCase().trim();
+  if (!q) return samples.value;
+  return samples.value.filter(s =>
+    s.content.toLowerCase().includes(q) ||
+    s.source_app.toLowerCase().includes(q) ||
+    (s.matched_content && s.matched_content.toLowerCase().includes(q))
+  );
+});
 
 const fetchSamples = async () => {
   try {
@@ -41,17 +53,17 @@ const fetchSamples = async () => {
   }
 };
 
-const deleteSample = async (id: number) => {
-  if (confirm('Delete this resonance from history?')) {
-    try {
-      await invoke('delete_sample', { id });
-      samples.value = samples.value.filter(s => s.id !== id);
-      if (selectedSample.value?.id === id) {
-        selectedSample.value = null;
-      }
-    } catch (e) {
-      console.error(e);
+const confirmDelete = async (id: number) => {
+  try {
+    await invoke('delete_sample', { id });
+    samples.value = samples.value.filter(s => s.id !== id);
+    if (selectedSample.value?.id === id) {
+      selectedSample.value = null;
     }
+  } catch (e) {
+    console.error(e);
+  } finally {
+    pendingDeleteId.value = null;
   }
 };
 
@@ -135,12 +147,23 @@ onMounted(async () => {
       <div class="pane-header">
         <div class="title-area">
           <h2>Triage Hub</h2>
-          <span class="count">{{ samples.length }} captures</span>
+          <span class="count">{{ filteredSamples.length }}<template v-if="searchQuery"> / {{ samples.length }}</template> captures</span>
         </div>
         <div class="actions">
           <button class="icon-btn" @click="invoke('ping_test')" title="Send Test Ping">⚡</button>
           <button class="icon-btn" @click="fetchSamples" title="Refresh">🔄</button>
         </div>
+      </div>
+
+      <div class="search-bar">
+        <span class="search-icon">🔍</span>
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="Search captures..."
+          class="search-input"
+        />
+        <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">✕</button>
       </div>
 
       <div v-if="is_loading && samples.length === 0" class="list-state">
@@ -152,9 +175,13 @@ onMounted(async () => {
         <span class="hint">Copy text to trigger.</span>
       </div>
 
+      <div v-else-if="filteredSamples.length === 0" class="list-state">
+        <p>No matches for "{{ searchQuery }}"</p>
+      </div>
+
       <div v-else class="list-content">
         <div 
-          v-for="sample in samples" 
+          v-for="sample in filteredSamples" 
           :key="sample.id" 
           class="list-item"
           :class="{ 'selected': selectedSample?.id === sample.id }"
@@ -163,18 +190,25 @@ onMounted(async () => {
           <div class="item-top">
             <span class="app-tag">{{ sample.source_app }}</span>
             <span class="score-tag" :class="getResonanceClass(sample.distance)">
-              {{ getScore(sample.distance) }}% Match
+              {{ getScore(sample.distance) }}% Match (d: {{ sample.distance.toFixed(3) }})
             </span>
           </div>
           <div class="item-preview">{{ sample.content }}</div>
           <div class="item-bottom">
             <span class="time">{{ formatDate(sample.created_at) }}</span>
+            <template v-if="pendingDeleteId === sample.id">
+              <div class="inline-confirm">
+                <button class="confirm-yes" @click.stop="confirmDelete(sample.id)">Delete</button>
+                <button class="confirm-no" @click.stop="pendingDeleteId = null">Cancel</button>
+              </div>
+            </template>
             <IconButton 
+              v-else
               size="sm" 
               variant="danger" 
               icon="🗑" 
               title="Delete" 
-              @click.stop="deleteSample(sample.id)" 
+              @click.stop="pendingDeleteId = sample.id" 
             />
           </div>
         </div>
@@ -392,4 +426,92 @@ onMounted(async () => {
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* Search Bar */
+.search-bar {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid #2a2a2a;
+  gap: 8px;
+}
+
+.search-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.search-input {
+  flex: 1;
+  background: #1a1a1c;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: #ccc;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.search-input::placeholder {
+  color: #555;
+}
+
+.search-input:focus {
+  border-color: #646cff;
+}
+
+.search-clear {
+  background: transparent;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: color 0.2s;
+}
+
+.search-clear:hover {
+  color: #ccc;
+}
+
+/* Inline Confirm */
+.inline-confirm {
+  display: flex;
+  gap: 6px;
+}
+
+.confirm-yes {
+  background: #e53935;
+  color: white;
+  border: none;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.confirm-yes:hover {
+  background: #c62828;
+}
+
+.confirm-no {
+  background: transparent;
+  color: #888;
+  border: 1px solid #444;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.confirm-no:hover {
+  color: #ccc;
+  border-color: #666;
+}
 </style>

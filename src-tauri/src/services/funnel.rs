@@ -2,14 +2,14 @@ use std::process::Command;
 use crate::services::vector_store::VectorStore;
 use crate::services::db::Database;
 use crate::config;
-use tauri::{AppHandle, Manager, Emitter};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindowBuilder, WebviewUrl};
 use std::sync::Arc;
 use log::{info};
 use serde::Serialize;
 use tauri_plugin_notification::NotificationExt;
 
 #[derive(Clone, Serialize)]
-struct ResonancePayload {
+pub struct ResonancePayload {
     id: i64,
     app_name: String,
     score: f32,
@@ -39,7 +39,8 @@ impl Funnel {
             return Ok(());
         }
 
-        let embedding = VectorStore::get_embedding(&content).await?;
+        let search_text = format!("search_query: {}", content);
+        let embedding = VectorStore::get_embedding(&search_text, &config.embedding_model).await?;
         let matches = self.vector_store.search(embedding, 3).await?;
 
         if !matches.is_empty() {
@@ -80,6 +81,52 @@ impl Funnel {
                 .title(format!("Resonance with {}", app_name))
                 .body(format!("{}% Match: {}", (score * 100.0) as i32, snippet))
                 .show();
+
+            // 3. Show floating bubble window (best-effort, never blocks main flow)
+            let bubble_app = self.app_handle.clone();
+            let bubble_payload = payload.clone();
+            tokio::spawn(async move {
+                // Close any existing bubble first
+                if let Some(w) = bubble_app.get_webview_window("resonance-bubble") {
+                    let _ = w.close();
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+
+                // Calculate position at bottom-right of screen
+                let (x, y) = if let Ok(Some(monitor)) = bubble_app.primary_monitor() {
+                    let size = monitor.size();
+                    let scale = monitor.scale_factor();
+                    let lw = size.width as f64 / scale;
+                    let lh = size.height as f64 / scale;
+                    (lw - 440.0, lh - 300.0)
+                } else {
+                    (1000.0, 500.0)
+                };
+
+                let build_result = WebviewWindowBuilder::new(
+                    &bubble_app,
+                    "resonance-bubble",
+                    WebviewUrl::App("bubble.html".into()),
+                )
+                .title("Resonance")
+                .inner_size(420.0, 260.0)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .position(x, y)
+                .build();
+
+                if let Err(e) = build_result {
+                    log::warn!("Failed to create bubble window: {}", e);
+                    return;
+                }
+
+                // Wait for the webview to load before emitting data
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let _ = bubble_app.emit_to("resonance-bubble", "bubble-data", &bubble_payload);
+            });
         } else {
             log::info!("Vector search returned empty matches.");
         }

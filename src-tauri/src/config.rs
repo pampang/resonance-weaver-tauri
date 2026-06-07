@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub kb_sources: Vec<String>,
     pub app_whitelist: Vec<String>,
     pub threshold: f32,
+    pub embedding_model: String,
 }
 
 impl Default for AppConfig {
@@ -16,7 +17,8 @@ impl Default for AppConfig {
         Self {
             kb_sources: Vec::new(),
             app_whitelist: vec!["Slack".to_string(), "Discord".to_string(), "Notes".to_string()],
-            threshold: 0.7,
+            threshold: 0.8,
+            embedding_model: "nomic-embed-text".to_string(),
         }
     }
 }
